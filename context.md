@@ -43,13 +43,15 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 - A entrega distribuída é *at-least-once*. Duplicatas entre PostgreSQL e Redis são possíveis; a operação do consumidor deve ser idempotente.
 - Preferir migrations aditivas, com `IF NOT EXISTS`, sem apagar dados. Não presumir que o container foi recriado ou o banco está vazio.
 - Segredos e credenciais não devem ir para código, logs, testes reais ou Git. Portas de serviços locais permanecem em loopback.
-- Sem publicação, candidatura, deploy, criação de conta ou serviço pago nesta tarefa.
+- Sem deploy, criação de conta ou serviço pago sem pedido explícito. O repositório é público em github.com/araujovito/hub-integracoes.
 
-## Próximos passos imediatos
+## Estado e próximos passos
 
-Atualização: migrations são serializadas e registradas; eventos falhos não são entregues por duplicatas; testes de integração usam esquema isolado. Chamadas de IA criam journal antes do envio e bloqueiam novas chamadas se o resultado for incerto. Recusas do provedor (400/401/403/404/422/429) encerram a intenção como `rejected` (migration `008`) e não bloqueiam; o request ID é gravado na intenção assim que a resposta chega. O administrador pode consultar pendências e reconciliar dados individuais comprovados via API; a contagem exata permanece desconhecida quando o provedor não disponibiliza esses dados. Consulte o README. A chamada real segue sem teste e não é autorizada automaticamente.
+Validado em 2026-11-08: lint, typecheck (src + scripts), 31 testes unitários, 30 de integração (`yarn test:integration` contra PostgreSQL/Redis descartáveis), `scripts/e2e-resilience.sh` (carga com SIGKILL no worker e PostgreSQL parado: zero reinícios de api/relay, entrega única, backup restaurado) e `compose.prod.yaml` com `DOMAIN=localhost` (HTTPS, segredos como arquivos). O CI roda tudo isso, menos o teste do Compose de produção. Não houve deploy nem chamada real de IA.
 
-Validado nesta etapa: imagem Docker e cinco serviços saudáveis, `/health` 200, `/ready` 200, rota admin sem token 401, CSP nonce para script e estilo, redrive ponta a ponta com uma entrega, recuperação após worker parado/reiniciado e limpeza dos dados de teste; ledger de tokens continua vazio. Auditoria completa `yarn audit` sem vulnerabilidades (267 dependências), lint, typecheck, 11 testes padrão e 8 testes de integração passaram. O adaptador OpenAI não foi chamado; continua opt-in e exigiria chave/autorização, portanto a chamada externa não foi validada. O sistema está pronto para apresentação como MVP local de portfólio, não para produção. Deploy continua fora de escopo. Consulte `roteiro.md`.
+O que falta para uma operação real está em `roteiro.md`, na seção "O que ainda falta". As atualizações de versão principal abertas pelo Dependabot (Node 25, Redis 8, actions v7) não foram aplicadas e precisam de avaliação.
+
+Para rodar o Compose de desenvolvimento, o `.env` precisa de `PLATFORM_ADMIN_TOKEN` e `TENANT_SECRETS_KEY` (ver `.env.example`); as antigas `WEBHOOK_SECRET`, `ADMIN_API_TOKEN` e `DEMO_TENANT_ID` não são mais lidas.
 
 ## Instruções de colaboração
 

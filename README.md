@@ -1,6 +1,6 @@
 # Hub de Integrações
 
-Projeto de portfólio para receber eventos de pedidos, validá-los, persistir a entrada com idempotência e preparar a entrega assíncrona a um ERP simulado. Inclui uma trilha de uso de IA que registra os tokens reportados pelo provedor sem guardar prompts ou respostas.
+Hub para receber pedidos de várias lojas por webhook assinado, validá-los, persistir com idempotência e entregá-los de forma assíncrona e confiável a um ERP (simulado). Inclui uma trilha de uso de IA que registra os tokens reportados pelo provedor sem guardar prompts ou respostas.
 
 ## Ambiente local
 
@@ -54,7 +54,7 @@ TS=$(date +%s); SIG=$(printf '%s' "$TS.$BODY" | openssl dgst -sha256 -hmac "$SEC
 - **Token administrativo por loja:** o dashboard e as rotas de operações usam `X-Admin-Token` da loja e só enxergam os dados dela. `DELETE .../admin-tokens/<tokenId>` revoga.
 - **Armazenamento:** segredos de webhook ficam cifrados com AES-256-GCM sob `TENANT_SECRETS_KEY`; tokens administrativos, só como SHA-256. Perder `TENANT_SECRETS_KEY` torna as chaves de webhook ilegíveis: as lojas precisam de chaves novas.
 
-## Fluxo do MVP
+## Fluxo
 
 ```text
 Webhook assinado → validação → PostgreSQL (evento + outbox na mesma transação)
@@ -152,8 +152,10 @@ cd backend
 yarn audit && yarn lint && yarn typecheck && yarn test && yarn test:integration && yarn build
 ```
 
-O CI executa estes passos com PostgreSQL/Redis. Consulte [`docs/modelo-de-ameacas.md`](docs/modelo-de-ameacas.md), [`docs/decisoes.md`](docs/decisoes.md) e [`roteiro.md`](roteiro.md).
+O CI executa estes passos com PostgreSQL e Redis, depois roda `scripts/e2e-resilience.sh` (carga contínua com SIGKILL no worker, PostgreSQL parado e religado, backup e restauração). Consulte [`docs/modelo-de-ameacas.md`](docs/modelo-de-ameacas.md), [`docs/decisoes.md`](docs/decisoes.md) e [`roteiro.md`](roteiro.md).
 
-## Limites conhecidos antes de publicar
+## Limites conhecidos
 
-O MVP pode ser apresentado como projeto de portfólio local com as limitações declaradas no roteiro. Não publique `.env`, tokens reais, dados de clientes ou capturas com credenciais. A chamada real de IA não foi exercitada; o recurso é opt-in. O modelo padrão `gpt-6-luna` aparece em catálogos de terceiros como modelo da API da OpenAI (lançado em 22/09/2026), mas o ID não foi confirmado na documentação oficial nem testado aqui; ajuste `OPENAI_MODEL` se necessário. Se o ID estiver errado, a API responde 404, a intenção é encerrada como `rejected` e o exemplo continua disponível. Descrições de terceiros apontam suporte a raciocínio; com o limite padrão de 96 tokens de saída, a resposta pode vir truncada ou vazia se o modelo gastar a saída raciocinando. O uso reportado é registrado do mesmo jeito. Consulte [`roteiro.md`](roteiro.md) e [`context.md`](context.md) para o estado técnico.
+Não houve deploy: `compose.prod.yaml` foi testado localmente. O que separa este código de uma operação real (alta disponibilidade, alertas, rotação da chave mestra, ERP real e outros) está listado em [`roteiro.md`](roteiro.md#o-que-ainda-falta). Não publique `.env`, o diretório `secrets/`, backups, tokens reais ou capturas com credenciais.
+
+A chamada real de IA não foi exercitada; o recurso é opt-in. O modelo padrão `gpt-6-luna` aparece em catálogos de terceiros como modelo da API da OpenAI (lançado em 22/09/2026), mas o ID não foi confirmado na documentação oficial nem testado aqui; ajuste `OPENAI_MODEL` se necessário. Se o ID estiver errado, a API responde 404, a intenção é encerrada como `rejected` e o exemplo continua disponível. Descrições de terceiros apontam suporte a raciocínio; com o limite padrão de 96 tokens de saída, a resposta pode vir truncada ou vazia se o modelo gastar a saída raciocinando. O uso reportado é registrado do mesmo jeito.

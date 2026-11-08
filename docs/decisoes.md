@@ -39,3 +39,51 @@
 **Motivo:** medir consumo de tokens mantendo minimização de dados.
 
 **Consequência:** até conectar provider autorizado, a métrica deve ficar vazia; contagem estimada não será apresentada como consumo real.
+
+## ADR-006 — Segredo de webhook cifrado, token admin como hash
+
+**Decisão:** chaves HMAC das lojas guardadas com AES-256-GCM sob `TENANT_SECRETS_KEY`, com loja e id da chave como dados autenticados; tokens administrativos guardados como SHA-256.
+
+**Motivo:** o HMAC exige o segredo em claro na verificação, então ele não pode ser hash. Já o token admin só precisa ser comparado, e por ser aleatório de 256 bits dispensa bcrypt/argon2. Os dados autenticados impedem que o ciphertext de uma loja, copiado para outra no banco, decifre.
+
+**Consequência:** `TENANT_SECRETS_KEY` vira o segredo mais crítico do sistema. Ele fica fora do banco e do backup, e precisa de cópia própria. A rotação dele ainda não está implementada.
+
+## ADR-007 — Proteção contra replay por horário assinado
+
+**Decisão:** assinatura sobre `<timestamp>.<corpo>`, janela de 300 s; dentro da janela, a deduplicação por `eventId` absorve o reenvio.
+
+**Motivo:** é o mesmo padrão de Stripe e Slack, conhecido por quem integra. Um nonce guardado por requisição exigiria mais estado por pedido, e o `eventId` já cumpre esse papel.
+
+**Consequência:** o remetente precisa de relógio sincronizado. A mudança quebrou a compatibilidade do protocolo, o que foi aceitável porque ainda não havia remetente real.
+
+## ADR-008 — Trim do stream por piso seguro, não por tamanho
+
+**Decisão:** `XTRIM MINID` com o menor entre o corte por idade, a mensagem pendente mais antiga e a primeira não lida pelo grupo.
+
+**Motivo:** `MAXLEN` apaga por contagem, inclusive mensagens pendentes ou ainda não lidas. Um worker parado perderia pedidos.
+
+**Consequência:** com o worker parado, o stream cresce até ele voltar. Isso é preferível a perder pedidos, mas exige monitorar a memória do Redis.
+
+## ADR-009 — Retenção limpa o payload, mas mantém a identidade do evento
+
+**Decisão:** depois de `DATA_RETENTION_DAYS`, o payload de pedidos entregues vira `{}`; a linha, com `eventId`, status e datas, permanece. Dead letters mantêm o payload.
+
+**Motivo:** apagar a linha faria a deduplicação esquecer o `eventId`, e um reenvio tardio do remetente geraria uma segunda entrega. O redrive precisa do payload.
+
+**Consequência:** a tabela de eventos cresce em número de linhas, mas não em volume de dados de pedido.
+
+## ADR-010 — Produção num host com Caddy e Docker secrets
+
+**Decisão:** `compose.prod.yaml` separado do de desenvolvimento, com Caddy (HTTPS automático) como único serviço exposto, segredos como arquivos (`*_FILE`) e a API confiando em exatamente um proxy.
+
+**Motivo:** a configuração não depende de provedor, e a convenção `*_FILE` funciona igual com Docker secrets, Kubernetes ou agentes de gerenciadores de segredos.
+
+**Consequência:** sem alta disponibilidade. Escalar exige PostgreSQL e Redis gerenciados ou replicados (ver `roteiro.md`).
+
+## ADR-011 — Falha de dependência é 503, nunca queda do processo
+
+**Decisão:** listener de `error` em todo pool `pg`, espera do banco na partida e tratador global que responde 503 para indisponibilidade e 500 genérico para o resto.
+
+**Motivo:** o teste de resiliência mostrou os processos morrendo quando o PostgreSQL reiniciava (evento `error` não tratado) e entrando em loop de reinício na partida. Clientes ficavam sem resposta em vez de receber um 503 para tentar de novo.
+
+**Consequência:** o teste de resiliência falha se api ou relay reiniciarem, ou se algum pedido ficar sem resposta HTTP.

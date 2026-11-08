@@ -1,97 +1,54 @@
-# Roteiro de evolução — Hub de Integrações
+# Roteiro — Hub de Integrações
 
-Objetivo: transformar o MVP em uma demonstração de portfólio segura, observável e escalável de integrações de pedidos, contabilizando o consumo de IA em tokens reportados pelo provedor, sem converter para moeda. O escopo inicial é deliberadamente local e usa um ERP simulado; nenhuma credencial externa é necessária.
+Objetivo: um hub de integração de pedidos seguro, observável e escalável, com várias lojas, entrega assíncrona confiável a um ERP (simulado) e contagem do consumo de IA em tokens reportados pelo provedor, sem conversão para moeda.
 
-## Estado atual
-
-- API Fastify em TypeScript, PostgreSQL e Redis em Docker Compose; portas locais vinculadas a loopback.
-- Webhook de pedidos autenticado por HMAC sobre o corpo bruto, schema estrito, rate limit e limite de payload.
-- Evento e intenção de publicação (outbox) gravados na mesma transação PostgreSQL; deduplicação por tenant/origem/evento.
-- `ai_token_usage` e `recordTokenUsage()` registram metadados de uso reportados pelo provedor, sem guardar prompt/resposta nem calcular preço em moeda. A chamada de demonstração permanece opt-in.
-- Health check e endpoint administrativo agregado de tokens protegidos.
-- Typecheck, testes, build e smoke tests anteriores passaram. Revalidar após as novas mudanças.
-
-## Arquitetura alvo do MVP
+## Estado atual (2026-11-08)
 
 ```text
-Webhook HMAC → validação → PostgreSQL (evento + outbox atômicos)
-                                      ↓
-                              relay outbox → Redis Streams
-                                                ↓
-                                  consumer group / worker
-                                                ↓
-                                  ERP simulado idempotente
-                                                ↓
-                                   status + métricas
+Loja ── HTTPS ──> Caddy ──> API ──> PostgreSQL (evento + outbox na mesma transação)
+        HMAC(horário.corpo)          │
+                                     └─> relay ──> Redis Streams ──> worker ──> ERP simulado
+                                                         ↑
+                                         maintenance (trim do stream, retenção de payloads)
 ```
 
-Redis Streams com consumer groups permite distribuir mensagens e mantê-las pendentes até o `XACK`; a recuperação de mensagens pendentes deve ser considerada. Isso é entrega *at-least-once*, não exactly-once. Portanto a idempotência do efeito de negócio no destino é obrigatória. Referência: documentação oficial Redis sobre [consumer groups](https://redis.io/docs/latest/develop/data-types/streams/), [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/), [XAUTOCLAIM](https://redis.io/docs/latest/commands/xautoclaim/) e [XACK](https://redis.io/docs/latest/commands/xack/).
+| Área | Implementado | Como foi verificado |
+| --- | --- | --- |
+| Entrega | Outbox transacional, relay com `SKIP LOCKED`, consumer group, `XACK` após commit, `XAUTOCLAIM`, dead letter e redrive pela outbox; entrega *at-least-once* com efeito idempotente | Testes de integração; `scripts/e2e-resilience.sh` no CI |
+| Várias lojas | Chave de webhook por loja (AES-256-GCM, rotação com carência, revogação), token admin por loja (SHA-256), token de plataforma só para cadastro, FKs por loja | Testes de integração de isolamento (eventos, cursor, dead letters, redrive, métricas compartilhadas) |
+| Replay | Assinatura sobre `<timestamp>.<corpo>`, janela de 300 s, deduplicação por `eventId` dentro da janela | Testes unitários e de integração; smoke no Compose |
+| Resiliência | Processos sobrevivem a queda do PostgreSQL e a SIGKILL do worker; API responde 503 sem detalhes internos | `e2e-resilience.sh`: carga contínua, zero reinícios de api/relay, cada pedido aceito entregue uma vez |
+| Retenção | Trim do stream sem tocar em pendentes/não lidas; payloads entregues limpos após 90 dias, identidade preservada | Testes de integração com Redis e PostgreSQL reais |
+| Produção | `compose.prod.yaml`: Caddy com HTTPS automático, só o Caddy com portas publicadas, segredos como arquivos (`*_FILE`), um proxy confiável | Stack local com `DOMAIN=localhost`: TLS 1.3, HSTS, 413 na borda, IP real do cliente nos logs |
+| Backup | `backup.sh` (pg_dump + SHA-256 + rotação), `restore-test.sh` (restaura e roda a aplicação contra o banco) | A cada push, no teste de resiliência, com contagem comparada à origem |
+| Cadeia de suprimentos | Node 24 LTS; imagens e ações fixadas por digest/SHA; Dependabot; gitleaks com checksum sobre todo o histórico; `yarn audit` | CI |
 
-## Próximos passos detalhados
+## O que ainda falta
 
-### 1. Fechar a entrega assíncrona confiável (MVP implementado; recuperação Redis automatizada e manualmente testada)
+Lista do que separa este código de uma operação real. Nada disso está implementado:
 
-1. Evoluir migrations de forma aditiva e idempotente; rodar todas em ordem sem apagar dados.
-2. Criar relay separado que reivindica linhas da outbox com `FOR UPDATE SKIP LOCKED`, publica no stream e marca o registro publicado. Aceitar que uma queda após `XADD` e antes do commit pode publicar duplicata.
-3. Criar worker com consumer group, reconhecimento somente depois do commit do efeito no banco e recuperação de pendências antigas com `XAUTOCLAIM`.
-4. Implementar ERP simulado numa tabela de entregas com chave única por tenant/evento; uma repetição não cria efeito duplicado.
-5. Contabilizar tentativas, falha terminal e dead-letter; redrive transacional pela outbox implementado e validado ponta a ponta (202 → outbox → relay → worker → uma entrega).
-6. Testes de integração cobrem migrations repetíveis, ledger de tokens idempotente, lock concorrente do teto de tokens, dedupe concorrente, limite de retries/DLQ, recuperação via XAUTOCLAIM e indisponibilidade Redis seguida de recuperação da outbox com evento preservado. Testes manuais com processos reais confirmaram recuperação após Redis indisponível e após worker parado/reiniciado; ambos entregaram uma vez e os dados foram removidos. Crash/restart ponta a ponta automatizado em `scripts/e2e-resilience.sh`.
+1. **Deploy.** Nunca rodou num servidor público. `compose.prod.yaml` foi testado só localmente, com o certificado interno do Caddy.
+2. **Alta disponibilidade.** É um host só: PostgreSQL e Redis sem réplica nem failover. Para escalar, a API é stateless e o worker escala pelo consumer group, mas banco e Redis precisam de serviço gerenciado ou de replicação.
+3. **Monitoramento e alertas.** Há logs JSON e as rotas `/v1/platform/queue` e `/v1/operations/summary`, mas não há exportação de métricas (Prometheus/OpenTelemetry) nem alerta de backlog, dead letter ou certificado.
+4. **Timeouts de SQL por consulta** (`statement_timeout`): uma consulta travada hoje segura uma conexão do pool sem limite.
+5. **Rotação da chave mestra** `TENANT_SECRETS_KEY`. O formato cifrado tem byte de versão para isso, mas não existe procedimento de re-cifragem.
+6. **Ciclo de vida de credenciais.** Tokens de plataforma e de loja não expiram sozinhos, e não há papéis dentro de uma loja (só leitura × operador).
+7. **Backup agendado e fora do servidor.** Os scripts existem; agendar (cron/systemd), cifrar e copiar para outro lugar é configuração de quem opera.
+8. **TLS entre serviços internos.** API, PostgreSQL e Redis conversam em texto claro dentro da rede do Compose. Vale num host só; com serviços em máquinas diferentes, é preciso TLS também ali.
+9. **Integração com ERP real.** O destino é uma tabela simulada. Um ERP real traz timeouts, limites e erros próprios, que o worker teria de tratar.
+10. **Chamada real de IA.** O adaptador nunca foi chamado de verdade, porque gera custo. O modelo padrão `gpt-6-luna` só foi confirmado em catálogos de terceiros.
+11. **Dashboard:** falta revisão manual em navegadores e de acessibilidade, e não há capturas na documentação.
+12. **Atualizações de versão principal** propostas pelo Dependabot (Node 25, Redis 8, actions v7) estão abertas e precisam de avaliação: Node 25 não é LTS, e o Redis 8 muda de licença.
 
-### 2. Operação e observabilidade (MVP local implementado; endurecimento pendente)
+## Critérios de pronto (MVP)
 
-1. Expor contagens de recebidos, fila, entregues, falhos, pendentes e dead-letter sem incluir payload/segredos (feito no MVP).
-2. Logs estruturados com `eventId`, correlação e resultado já mascaram os headers de autenticação; revisar logging ao adicionar integrações externas.
-3. Relay e worker agora mantêm o processo vivo em falhas transitórias e tentam novamente com backoff exponencial limitado e jitter. Processos sobrevivem a queda do PostgreSQL (pool com tratamento de `error`, espera do banco na partida, 503 em vez de 500). Ainda faltam timeouts SQL por consulta (`statement_timeout`).
-4. Retenção implementada (serviço `maintenance`): trim do stream só de entradas confirmadas e lidas, e remoção de payloads entregues após `DATA_RETENTION_DAYS`. Falta alerta automático de backlog; a idade do evento mais antigo já sai em `/v1/platform/queue`.
-5. Health/readiness distintos: `/health` informa liveness; `/ready` verifica dependências (implementado).
-
-### 3. Segurança e isolamento
-
-1. Sair do tenant demo: autenticação de tenants, autorização por recurso e chaves HMAC individuais com rotação.
-2. Validar replay (timestamp/nonce), limites por cliente e política de tamanho/campos permitidos.
-3. Segregar credenciais por ambiente via secret manager; TLS em trânsito e backups/restauração testados.
-4. Minimizar dados pessoais; hoje o pedido aceita somente identificadores/SKUs/quantidades/valores e não guarda dados de cliente.
-5. Threat model e testes contra abuso, vazamento via logs, injection e acesso cruzado entre tenants.
-
-### 4. Integração real e medição de IA (adaptador e ledger de tokens implementados; chamada externa opt-in)
-
-1. IA permanece opcional; caso demonstrativo fixo não envia dados reais de pedidos.
-2. Adaptador OpenAI Responses implementado; modelo default `gpt-6-luna` configurável. Executar somente após configurar chave e clicar conscientemente no botão, pois pode gerar cobrança.
-3. São registrados tokens reportados, breakdown cache/raciocínio, modelo, tarefa, latência no log e request ID; prompt/resposta não são persistidos pelo app.
-4. Tokens de entrada, cache, saída, raciocínio e total são persistidos por chamada, agregados no endpoint e exibidos no dashboard; cache é subconjunto da entrada e raciocínio da saída, sem dupla contagem; não converter o uso para moeda.
-5. Nunca inferir tokens por caracteres quando o provedor oferece contagem oficial; nunca persistir prompt/resposta por padrão. A métrica cobre só as chamadas feitas pelo próprio app.
-6. Teto diário de tokens implementado com advisory lock PostgreSQL, reserva conservadora para entrada, limite dinâmico de saída e rate limit; a contagem real só é registrada após a resposta do provedor, então não é possível prever exatamente o consumo antes da chamada. Timeout de 30s e zero retries automáticos; avaliar fallback apenas quando houver um segundo provider.
-7. Testar agregação por período, idempotência por request ID, campos ausentes e resposta de erro.
-
-### 5. API de operações e interface de portfólio (MVP local implementado; auditoria/UX pendentes)
-
-1. API protegida para listar eventos com paginação e filtros, detalhar status sem expor segredos e pedir redrive via outbox transacional (validado ponta a ponta).
-2. Dashboard local com fila, sucesso/falha, latência, tentativas e tokens por período/modelo/tarefa; controles responsivos, foco visível e estados de carregamento/erro implementados. Revisão manual em navegadores e documentação visual ainda pendentes.
-3. Filtro de tokens por período implementado (padrão 30 dias; API limita a janela a 366 dias). O intervalo do dashboard é enviado em UTC; acessibilidade automatizada básica coberta, revisão completa ainda necessária.
-4. Não permitir que a interface seja a única barreira de autorização; autorização vive na API.
-
-### 6. Qualidade, deploy e apresentação (CI, auditoria de dependências e documentação base implementadas)
-
-1. CI executa typecheck, testes unitários/de integração, build, lint, auditoria de dependências e secret scan.
-2. Testes automatizados cobrem recuperação da outbox após falha Redis e recuperação de mensagem pendente via XAUTOCLAIM. Foram validadas manualmente recuperação do relay/worker após indisponibilidade breve do Redis e recuperação da fila após parada/reinício do worker, ambas com entrega única. `scripts/e2e-resilience.sh` automatiza indisponibilidade do PostgreSQL, crash (SIGKILL) e reinício do worker sob carga sustentada, conferindo entrega única de cada pedido aceito. Foi feito burst local controlado de 30 pedidos + 30 duplicatas concorrentes, com 30 entregas únicas.
-3. Docker executa como usuário não-root; tags das imagens base são explícitas, mas ainda não fixadas por digest. As ações do CI estão fixadas por SHA de commit, com o Dependabot propondo atualizações, e o gitleaks é baixado com versão e checksum fixos; as imagens Docker (Node, PostgreSQL, Redis) também estão fixadas por digest, com o Dependabot propondo novos digests.
-4. Guia local de demonstração, diagrama, decisões ADR, limitações conhecidas e threat model resumido.
-5. Só então considerar deploy de demonstração com dados fictícios, orçamento/limites e segredos gerenciados.
-
-## Critérios de pronto do MVP
-
-- Reenviar o mesmo webhook não duplica evento nem efeito no ERP simulado.
-- Falha Redis mantém evento na outbox para publicação posterior; queda do worker deixa mensagem recuperável, reconhecida somente depois do efeito persistido.
-- Falhas transitórias têm tentativas limitadas e falha terminal visível, sem loop infinito.
-- Logs e respostas não revelam assinatura, token administrativo, credenciais, prompts ou payloads sensíveis.
-- Métricas de tokens permanecem zeradas até existir chamada real; números não são inventados.
-- `docker compose up --build`, testes, typecheck e build passam em ambiente limpo.
+- [x] Reenviar o mesmo webhook não duplica evento nem efeito no ERP simulado.
+- [x] Falha do Redis mantém o evento na outbox; queda do worker deixa a mensagem recuperável, com `XACK` só depois do efeito persistido.
+- [x] Falhas transitórias têm tentativas limitadas e falha terminal visível, sem loop infinito.
+- [x] Logs e respostas não revelam assinatura, tokens, credenciais, prompts ou mensagens internas.
+- [x] Métricas de tokens ficam zeradas até existir chamada real; nenhum número é inventado.
+- [x] `docker compose up --build`, testes, typecheck e build passam em ambiente limpo: o job `resilience` do CI sobe a stack de um clone novo, com volumes novos.
 
 ## Como retomar
 
-Leia primeiro `context.md`, depois este roteiro e `README.md`. Trabalhe em etapas pequenas, atualize os documentos após cada marco, não altere `.env`, não faça deploy nem configure serviço pago sem instrução explícita. Rode verificações e relate claramente o que foi e não foi testado.
-# Atualização: reconciliação de tokens
-
-O journal registra chamadas antes do envio e bloqueia novas chamadas quando o consumo fica incerto. A API administrativa permite consultar pendências e registrar somente contagens individuais verificadas, com evidência e proteção contra duplicação. Sem dados recuperáveis do provedor, a pendência permanece e não é possível garantir um total exato. Testar o adaptador real exige autorização explícita para uma chamada potencialmente paga.
-
+Leia `context.md`, depois este roteiro e o `README.md`. Trabalhe em etapas pequenas e atualize os documentos a cada marco. Não altere o `.env`, não faça deploy nem configure serviço pago sem instrução explícita. Rode as verificações e diga com clareza o que foi e o que não foi testado.
