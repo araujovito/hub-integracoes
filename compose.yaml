@@ -18,13 +18,13 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local-only-change-this-password}", "--appendonly", "yes"]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "--appendonly", "yes"]
     ports:
       - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD:-local-only-change-this-password}' ping | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}' ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -38,7 +38,7 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 3000
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
       DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
       REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
@@ -72,7 +72,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
       DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
@@ -98,7 +98,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
       DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
       ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
