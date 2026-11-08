@@ -21,6 +21,7 @@ let app: Awaited<ReturnType<typeof buildApp>>;
 beforeAll(async () => {
   if (!enabled) return;
   db = await createIsolatedDatabase();
+  await db.pool.query('INSERT INTO tenants (id, name) VALUES ($1, $1)', [config.DEMO_TENANT_ID]);
   redis = new Redis(config.REDIS_URL, { enableOfflineQueue: false, lazyConnect: true });
   await redis.connect();
   app = await buildApp({ pool: db.pool, redis, secrets, logger: false });
