@@ -60,7 +60,7 @@ Redis Streams com consumer groups permite distribuir mensagens e mantê-las pend
 2. Adaptador OpenAI Responses implementado; modelo default `gpt-6-luna` configurável. Executar somente após configurar chave e clicar conscientemente no botão, pois pode gerar cobrança.
 3. São registrados tokens reportados, breakdown cache/raciocínio, modelo, tarefa, latência no log e request ID; prompt/resposta não são persistidos pelo app.
 4. Tokens de entrada, cache, saída, raciocínio e total são persistidos por chamada, agregados no endpoint e exibidos no dashboard; cache é subconjunto da entrada e raciocínio da saída, sem dupla contagem; não converter o uso para moeda.
-5. Nunca inferir tokens por caracteres quando o provedor oferece contagem oficial; nunca persistir prompt/resposta por padrão. Métrica do app não corresponde ao uso interno de uma conversa do Codex.
+5. Nunca inferir tokens por caracteres quando o provedor oferece contagem oficial; nunca persistir prompt/resposta por padrão. A métrica cobre só as chamadas feitas pelo próprio app.
 6. Teto diário de tokens implementado com advisory lock PostgreSQL, reserva conservadora para entrada, limite dinâmico de saída e rate limit; a contagem real só é registrada após a resposta do provedor, então não é possível prever exatamente o consumo antes da chamada. Timeout de 30s e zero retries automáticos; avaliar fallback apenas quando houver um segundo provider.
 7. Testar agregação por período, idempotência por request ID, campos ausentes e resposta de erro.
 
