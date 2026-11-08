@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Workflow actions are pinned by commit SHA; Dependabot proposes updates
+  # (new SHA + version comment) as reviewable pull requests.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
