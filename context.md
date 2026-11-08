@@ -17,6 +17,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 ## Implementado
 
 - `POST /v1/webhooks/orders`: HMAC-SHA256 do corpo bruto, comparação em tempo constante, schema estrito, limite de tamanho e rate limit Redis compartilhado; grava `integration_events` e `outbox_events` na mesma transação; deduplica com unique key.
+- O webhook responde 415 `expected_application_json` quando o corpo não veio do parser JSON do app (sem corpo, `text/plain` etc.), antes de verificar o HMAC; antes disso esses casos davam 500 com a mensagem interna (`backend/src/json-body.ts`).
 - `GET /health`: liveness do processo; `GET /ready`: readiness que testa PostgreSQL e Redis.
 - `GET /v1/usage/tokens`: exige `X-Admin-Token`, aceita período e retorna tokens agregados por modelo/tarefa e total do período.
 - `recordTokenUsage()` em `backend/src/token-usage.ts` guarda metadados e uso oficial (entrada, cache, saída e raciocínio), sem armazenar prompt/resposta nem converter para moeda. `backend/src/openai-provider.ts` chama OpenAI Responses com prompt fixo, limite de saída, `store:false`, timeout, zero retries, idempotência por request ID e teto diário configurável (admissão serializada por advisory lock; reserva conservadora de entrada). Rota admin `POST /v1/ai/demo`, rate-limited, e botão no painel; sem `OPENAI_API_KEY`, permanece desabilitada. Nunca executar uma chamada externa paga durante desenvolvimento sem ação explícita do usuário.

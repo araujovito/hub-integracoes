@@ -12,9 +12,7 @@ import { orderSchema } from './orders.js';
 import { verifyAdminToken, verifySignature } from './security.js';
 import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
-
-type ParsedJson = { raw: string; value: unknown };
-type ParsedJsonRequest = FastifyRequest & { body: ParsedJson };
+import { isParsedJson, type ParsedJson } from './json-body.js';
 
 const app = Fastify({
   logger: { redact: ['req.headers.authorization', 'req.headers.x-admin-token', 'req.headers.x-webhook-signature'] },
@@ -265,7 +263,8 @@ app.post<{ Params: { id: string } }>('/v1/operations/dead-letters/:id/redrive', 
 app.post<{ Body: ParsedJson }>('/v1/webhooks/orders', {
   config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
 }, async (request, reply) => {
-  const body = (request as ParsedJsonRequest).body;
+  const body: unknown = request.body;
+  if (!isParsedJson(body)) return reply.code(415).send({ error: 'expected_application_json' });
   const signatureHeader = request.headers['x-webhook-signature'];
   const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
   if (!verifySignature(body.raw, signature, config.WEBHOOK_SECRET)) {
