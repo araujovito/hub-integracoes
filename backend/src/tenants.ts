@@ -68,7 +68,7 @@ export async function activeWebhookSecrets(pool: Pool, keys: MasterKeys, tenantI
     `SELECT k.id, k.secret_ciphertext FROM tenant_webhook_keys k JOIN tenants t ON t.id = k.tenant_id
       WHERE k.tenant_id=$1 AND t.disabled_at IS NULL AND k.revoked_at IS NULL
         AND (k.expires_at IS NULL OR k.expires_at > now())
-      ORDER BY k.created_at DESC LIMIT 5`,
+      ORDER BY k.created_at DESC`,
     [tenantId],
   );
   const secrets: string[] = [];

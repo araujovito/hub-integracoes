@@ -38,6 +38,13 @@ suite('tenant store', () => {
     expect(await activeWebhookSecrets(db.pool, masterKey, 'loja-b')).toEqual([immediate.secret]);
   });
 
+  it('accepts every unexpired key across more than five rotations', async () => {
+    await createTenant(db.pool, 'loja-many', 'Many');
+    const secrets = [];
+    for (let i = 0; i < 6; i++) secrets.push((await createWebhookKey(db.pool, masterKey, 'loja-many', 3600)).secret);
+    expect(new Set(await activeWebhookSecrets(db.pool, masterKey, 'loja-many'))).toEqual(new Set(secrets));
+  });
+
   it('revokes a webhook key only within its own tenant', async () => {
     const key = await createWebhookKey(db.pool, masterKey, 'loja-a', 0);
     expect(await revokeWebhookKey(db.pool, 'loja-b', key.keyId)).toBe(false);
