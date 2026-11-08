@@ -11,8 +11,8 @@ export const FILE_BACKED_VARIABLES = [
   'DATABASE_URL',
   'REDIS_URL',
   'OPENAI_API_KEY',
-  'WEBHOOK_SECRET',
-  'ADMIN_API_TOKEN',
+  'PLATFORM_ADMIN_TOKEN',
+  'TENANT_SECRETS_KEY',
 ] as const;
 
 type Env = Record<string, string | undefined>;

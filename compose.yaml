@@ -39,11 +39,10 @@ services:
       PORT: 3000
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
-      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
       REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
-      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
+      PLATFORM_ADMIN_TOKEN: ${PLATFORM_ADMIN_TOKEN:?Set PLATFORM_ADMIN_TOKEN in .env}
+      TENANT_SECRETS_KEY: ${TENANT_SECRETS_KEY:?Set TENANT_SECRETS_KEY in .env}
       DASHBOARD_ENABLED: ${DASHBOARD_ENABLED:-true}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
@@ -73,7 +72,6 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
-      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
       REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
     depends_on:
@@ -97,7 +95,6 @@ services:
       NODE_ENV: ${NODE_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
       REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
-      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
       REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
       REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
       WORKER_CONSUMER: ${WORKER_CONSUMER:-worker}

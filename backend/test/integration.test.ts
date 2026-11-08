@@ -15,6 +15,7 @@ const provider = vi.hoisted(() => ({ create: vi.fn() }));
 vi.mock('openai', () => ({ default: class { responses = { create: provider.create }; } }));
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === 'true';
+const TENANT = 'integration-test';
 const suite = enabled ? describe : describe.skip;
 const schemaName = `integration_test_${randomUUID().replaceAll('-', '')}`;
 const adminPool = enabled ? new Pool({ connectionString: config.DATABASE_URL }) : undefined;
@@ -55,7 +56,7 @@ suite('local integration services', () => {
     const migrations = await pool!.query('SELECT count(*)::int AS count FROM schema_migrations');
     expect(migrations.rows[0]?.count).toBe(9);
     // Tenant-scoped tables reference tenants (migration 009); later tests write to this tenant.
-    await pool!.query('INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING', [config.DEMO_TENANT_ID]);
+    await pool!.query('INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING', [TENANT]);
   });
 
   it('keeps an outbox event pending through Redis outage and publishes it after recovery', async () => {
@@ -67,7 +68,7 @@ suite('local integration services', () => {
     await pool!.query(
       `INSERT INTO integration_events(id,tenant_id,source,external_event_id,order_id,payload)
        VALUES($1,$2,'integration-test',$3,$4,'{}'::jsonb)`,
-      [id, config.DEMO_TENANT_ID, `outage-${id}`, orderId],
+      [id, TENANT, `outage-${id}`, orderId],
     );
     await pool!.query(
       `INSERT INTO outbox_events(integration_event_id,event_type,payload) VALUES($1,'order.received','{}'::jsonb)`,
@@ -103,7 +104,7 @@ suite('local integration services', () => {
     const requestId = `integration-test-${randomUUID()}`;
     usageRequestIds.push(requestId);
     const usage = {
-      tenantId: config.DEMO_TENANT_ID, task: 'integration-test', provider: 'test-provider', model: 'test-model',
+      tenantId: TENANT, task: 'integration-test', provider: 'test-provider', model: 'test-model',
       providerRequestId: requestId, inputTokens: 120, cachedInputTokens: 20,
       outputTokens: 35, reasoningTokens: 8, totalTokens: 155,
     };
@@ -125,17 +126,17 @@ suite('local integration services', () => {
     provider.create.mockResolvedValueOnce({ id: 'test-success', model: 'test-model', output_text: 'ok', usage });
     provider.create.mockResolvedValueOnce({ id: 'test-unknown', model: 'test-model', output_text: 'ok', usage: { ...usage, total_tokens: 16 } });
     try {
-      const result = await runTokenMeterDemo(pool!);
+      const result = await runTokenMeterDemo(pool!, TENANT);
       expect(result.usage.totalTokens).toBe(15);
-      await expect(runTokenMeterDemo(pool!)).rejects.toThrow();
-      await expect(runTokenMeterDemo(pool!)).rejects.toThrow('ai_usage_unresolved');
+      await expect(runTokenMeterDemo(pool!, TENANT)).rejects.toThrow();
+      await expect(runTokenMeterDemo(pool!, TENANT)).rejects.toThrow('ai_usage_unresolved');
       expect(provider.create).toHaveBeenCalledTimes(2);
       const journal = await pool!.query("SELECT status, count(*)::int AS count FROM ai_request_journal GROUP BY status ORDER BY status");
       expect(journal.rows).toEqual([{ status: 'pending', count: 1 }, { status: 'recorded', count: 1 }]);
       const pending = await pool!.query("SELECT id FROM ai_request_journal WHERE status='pending'");
-      const reconciledUsage = { tenantId: config.DEMO_TENANT_ID, task: 'portfolio-token-meter-demo', provider: 'openai', model: 'test-model', providerRequestId: 'test-reconciled', inputTokens: 12, outputTokens: 3, totalTokens: 15 };
-      await reconcileAiUsage(pool!, pending.rows[0].id, config.DEMO_TENANT_ID, reconciledUsage, 'verified test usage');
-      await expect(reconcileAiUsage(pool!, pending.rows[0].id, config.DEMO_TENANT_ID, reconciledUsage, 'verified test usage')).rejects.toThrow('pending_request_not_found');
+      const reconciledUsage = { tenantId: TENANT, task: 'portfolio-token-meter-demo', provider: 'openai', model: 'test-model', providerRequestId: 'test-reconciled', inputTokens: 12, outputTokens: 3, totalTokens: 15 };
+      await reconcileAiUsage(pool!, pending.rows[0].id, TENANT, reconciledUsage, 'verified test usage');
+      await expect(reconcileAiUsage(pool!, pending.rows[0].id, TENANT, reconciledUsage, 'verified test usage')).rejects.toThrow('pending_request_not_found');
       expect((await pool!.query("SELECT count(*)::int AS count FROM ai_request_journal WHERE status='pending'")).rows[0].count).toBe(0);
     } finally {
       config.OPENAI_API_KEY = previousKey;
@@ -151,10 +152,10 @@ suite('local integration services', () => {
     provider.create.mockRejectedValueOnce(Object.assign(new Error('model not found'), { status: 404, requestID: 'test-rejected' }));
     provider.create.mockResolvedValueOnce({ id: 'test-after-rejection', model: 'test-model', output_text: 'ok', usage });
     try {
-      await expect(runTokenMeterDemo(pool!)).rejects.toThrow('model not found');
+      await expect(runTokenMeterDemo(pool!, TENANT)).rejects.toThrow('model not found');
       const rejected = await pool!.query("SELECT status, provider_status, provider_request_id FROM ai_request_journal WHERE provider_request_id='test-rejected'");
       expect(rejected.rows).toEqual([{ status: 'rejected', provider_status: 404, provider_request_id: 'test-rejected' }]);
-      const result = await runTokenMeterDemo(pool!);
+      const result = await runTokenMeterDemo(pool!, TENANT);
       expect(result.requestId).toBe('test-after-rejection');
       expect((await pool!.query("SELECT count(*)::int AS count FROM ai_request_journal WHERE status='pending'")).rows[0].count).toBe(0);
     } finally {
@@ -197,12 +198,12 @@ suite('local integration services', () => {
     await pool!.query(
       `INSERT INTO integration_events (id, tenant_id, source, external_event_id, order_id, payload)
        VALUES ($1,$2,'integration-test',$3,$4,$5::jsonb)`,
-      [id, config.DEMO_TENANT_ID, eventKey, payload.orderId, JSON.stringify(payload)],
+      [id, TENANT, eventKey, payload.orderId, JSON.stringify(payload)],
     );
     const first = await pool!.query(
       `INSERT INTO integration_events (tenant_id, source, external_event_id, order_id, payload)
        VALUES ($1,'integration-test',$2,$3,$4::jsonb) ON CONFLICT (tenant_id,source,external_event_id) DO NOTHING RETURNING id`,
-      [config.DEMO_TENANT_ID, eventKey, payload.orderId, JSON.stringify(payload)],
+      [TENANT, eventKey, payload.orderId, JSON.stringify(payload)],
     );
     expect(first.rowCount).toBe(0);
 
@@ -218,7 +219,7 @@ suite('local integration services', () => {
     await pool!.query(
       `INSERT INTO integration_events (id,tenant_id,source,external_event_id,order_id,payload,status)
        VALUES ($1,$2,'integration-test',$3,$4,'{}'::jsonb,'processing')`,
-      [id, config.DEMO_TENANT_ID, `failure-${id}`, `order-${id}`],
+      [id, TENANT, `failure-${id}`, `order-${id}`],
     );
     const streamId = `test-${id}`;
     const first = await recordDeliveryFailure(pool!, id, streamId, 'temporary_failure', 2);

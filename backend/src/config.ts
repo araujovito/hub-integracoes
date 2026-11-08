@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveFileBackedEnv } from './env-files.js';
+import { parseMasterKey } from './tenant-crypto.js';
 
 if (process.env.NODE_ENV !== 'test') dotenv.config({ path: resolve(process.cwd(), '../.env') });
 
@@ -10,7 +11,6 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
-  DEMO_TENANT_ID: z.string().min(1).max(100).default('demo'),
   REDIS_STREAM_KEY: z.string().min(1).default('integration:orders'),
   REDIS_CONSUMER_GROUP: z.string().min(1).default('erp-simulator'),
   WORKER_CONSUMER: z.string().min(1).default('worker-local'),
@@ -31,8 +31,17 @@ export const config = schema.parse(env);
 // Secrets only the HTTP API uses. Kept out of `config` so the relay and worker
 // start without them and the Compose file does not have to hand them over.
 const apiSecretsSchema = z.object({
-  WEBHOOK_SECRET: z.string().min(32),
-  ADMIN_API_TOKEN: z.string().min(32),
+  // Platform operator token: creates stores and issues their credentials.
+  PLATFORM_ADMIN_TOKEN: z.string().min(32),
+  // Encrypts stored webhook secrets; 32 random bytes in base64.
+  TENANT_SECRETS_KEY: z.string().transform((value, context) => {
+    try {
+      return parseMasterKey(value);
+    } catch (error) {
+      context.addIssue({ code: 'custom', message: (error as Error).message });
+      return z.NEVER;
+    }
+  }),
 });
 
 export type ApiSecrets = z.infer<typeof apiSecretsSchema>;

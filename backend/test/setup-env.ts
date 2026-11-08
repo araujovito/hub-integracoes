@@ -9,8 +9,9 @@ if (process.env.RUN_INTEGRATION_TESTS !== 'true') {
   const placeholders: Record<string, string> = {
     DATABASE_URL: 'postgres://unit:unit@127.0.0.1:1/unit-tests-do-not-connect',
     REDIS_URL: 'redis://127.0.0.1:1',
-    WEBHOOK_SECRET: 'unit-test-placeholder-webhook-secret-32+',
-    ADMIN_API_TOKEN: 'unit-test-placeholder-admin-token-32-chars',
+    PLATFORM_ADMIN_TOKEN: 'unit-test-placeholder-platform-token-32-chars',
+    // 32 zero bytes, base64: valid shape, protects nothing.
+    TENANT_SECRETS_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
   };
   for (const [name, value] of Object.entries(placeholders)) process.env[name] ??= value;
 }

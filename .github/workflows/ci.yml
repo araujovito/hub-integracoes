@@ -34,8 +34,6 @@ jobs:
     env:
       DATABASE_URL: postgres://hub_test:hub_test_password@127.0.0.1:5432/hub_test
       REDIS_URL: redis://127.0.0.1:6379
-      WEBHOOK_SECRET: ci-only-webhook-secret-more-than-32-characters
-      ADMIN_API_TOKEN: ci-only-admin-token-more-than-32-characters
     services:
       postgres:
         image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac

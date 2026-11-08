@@ -27,6 +27,23 @@ yarn typecheck
 
 Os valores de `.env.example` são apenas para desenvolvimento local. Não os reutilize fora da máquina. As portas do banco e do Redis estão vinculadas a `127.0.0.1`.
 
+## Lojas e credenciais
+
+Cada loja (tenant) tem chaves de webhook e tokens administrativos próprios. O operador da plataforma usa `PLATFORM_ADMIN_TOKEN` (header `X-Platform-Token`) para cadastrar lojas e emitir credenciais; esse token não lê dados de nenhuma loja. Segredos e tokens aparecem **uma única vez**, na resposta de criação.
+
+```bash
+H='X-Platform-Token: <PLATFORM_ADMIN_TOKEN>'
+curl -X POST localhost:3000/v1/platform/tenants -H "$H" -H 'content-type: application/json' -d '{"id":"loja-a","name":"Loja A"}'
+curl -X POST localhost:3000/v1/platform/tenants/loja-a/webhook-keys -H "$H" -H 'content-type: application/json' -d '{}'
+curl -X POST localhost:3000/v1/platform/tenants/loja-a/admin-tokens -H "$H" -H 'content-type: application/json' -d '{"label":"operador"}'
+```
+
+A loja envia pedidos para `POST /v1/webhooks/orders` com `X-Tenant-Id: loja-a` e `X-Webhook-Signature: sha256=<HMAC-SHA256 do corpo com o segredo>`. Loja inexistente, loja desativada e assinatura errada recebem a mesma resposta (401), para o endpoint não revelar quais lojas existem.
+
+- **Troca de chave sem parada:** criar uma chave nova dá às anteriores uma carência (`graceHours`, padrão 24). Durante a carência, as duas são aceitas; `graceHours: 0` encerra as antigas na hora. `DELETE .../webhook-keys/<keyId>` revoga imediatamente.
+- **Token administrativo por loja:** o dashboard e as rotas de operações usam `X-Admin-Token` da loja e só enxergam os dados dela. `DELETE .../admin-tokens/<tokenId>` revoga.
+- **Armazenamento:** segredos de webhook ficam cifrados com AES-256-GCM sob `TENANT_SECRETS_KEY`; tokens administrativos, só como SHA-256. Perder `TENANT_SECRETS_KEY` torna as chaves de webhook ilegíveis: as lojas precisam de chaves novas.
+
 ## Fluxo do MVP
 
 ```text
@@ -41,7 +58,7 @@ A API recebe webhook assinado e grava evento + outbox na mesma transação. Um r
 
 ## Contagem de tokens
 
-`ai_token_usage` guarda, por execução, tarefa, provedor, modelo, tokens de entrada, saída, total, cache e raciocínio, além do request ID. `recordTokenUsage()` aceita somente números reportados pelo provider; não estima tokens por caracteres nem converte o uso em moeda. Cache é subconjunto da entrada e raciocínio é subconjunto da saída; não devem ser somados ao total outra vez. O endpoint `GET /v1/usage/tokens` agrega o uso e exige `X-Admin-Token`.
+`ai_token_usage` guarda, por execução, tarefa, provedor, modelo, tokens de entrada, saída, total, cache e raciocínio, além do request ID. `recordTokenUsage()` aceita somente números reportados pelo provider; não estima tokens por caracteres nem converte o uso em moeda. Cache é subconjunto da entrada e raciocínio é subconjunto da saída; não devem ser somados ao total outra vez. O endpoint `GET /v1/usage/tokens` agrega o uso da loja e exige o `X-Admin-Token` dela.
 
 O backend inclui um exemplo opcional via OpenAI Responses API, usando `gpt-6-luna`, pergunta fixa, saída limitada, `store: false`, sem retries automáticos e limite de 3 chamadas por hora. Configure `OPENAI_API_KEY` no `.env` local para habilitar o botão; sem chave, nenhuma chamada externa acontece. Acionar o exemplo pode gerar cobrança na conta da API. Prompt e resposta não são persistidos pelo app. O painel contabiliza tokens reportados pelo provedor (entrada, cache, saída e raciocínio), não calcula preço em reais ou outra moeda. A contagem cobre só as chamadas feitas pelo próprio app.
 
@@ -56,23 +73,23 @@ Para habilitar: adicione a chave API ao `.env` local (não ao Git), execute `doc
 Exemplo de consulta:
 
 ```bash
-curl -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+curl -H "X-Admin-Token: $STORE_ADMIN_TOKEN" \
   "http://localhost:3000/v1/usage/tokens?from=2026-11-01&to=2026-12-01"
 ```
 
 ## Segurança e crescimento
 
-- O webhook exige HMAC SHA-256 sobre o corpo bruto, comparado em tempo constante, valida schema estrito e aplica limite de requisições compartilhado pelo Redis e limite de tamanho. Sem autenticação por tenant, o escopo segue sendo um demo de tenant único.
+- O webhook exige HMAC SHA-256 sobre o corpo bruto com a chave da loja, comparado em tempo constante, valida schema estrito e aplica limite de requisições compartilhado pelo Redis e limite de tamanho.
 - O banco usa chaves únicas para impedir duplicação e uma outbox para não separar a persistência do evento da intenção de publicá-lo.
-- O endpoint de métricas exige token administrativo e retorna agregados, sem prompts ou respostas.
+- Cada token administrativo é de uma loja e todas as consultas de operações filtram por ela; testes de integração cobrem o acesso cruzado (eventos, cursor, dead letters, redrive).
 - A API é stateless e pode escalar horizontalmente; os workers poderão escalar pela fila. A entrega deve ser tratada como *at-least-once*, com idempotência também no consumidor.
-- Este ambiente é um MVP de tenant único. Não é produção: antes de exposição pública, implementar autenticação/autorização por tenant, replay protection, secret manager/rotação, TLS, política de retenção e restauração de backups.
+- Ainda não é produção: faltam proteção contra replay, TLS, política de retenção e restauração de backups testada (ver `roteiro.md`).
 
 ## Operações
 
-As rotas abaixo exigem `X-Admin-Token`:
+As rotas abaixo exigem o `X-Admin-Token` de uma loja e respondem só com dados dela:
 
-- `GET /v1/operations/summary`: contagem por status, outbox não publicada, idade da mais antiga, mensagens pendentes no Redis e dead letters.
+- `GET /v1/operations/summary`: contagem por status, outbox não publicada, idade da mais antiga e dead letters.
 - `GET /v1/operations/events?limit=25&status=failed&cursor=<uuid>`: eventos paginados por cursor.
 - `GET /v1/operations/dead-letters`: falhas terminais ainda não reprocessadas.
 - `POST /v1/operations/dead-letters/:id/redrive`: grava redrive na outbox transacional e reinicia tentativas; o relay publica no stream.
@@ -80,7 +97,9 @@ As rotas abaixo exigem `X-Admin-Token`:
 - `GET /v1/ai/status`: estado do provider, tokens reais usados no dia UTC e teto configurado.
 - `POST /v1/ai/demo`: executa o prompt fixo opcional; respeita o rate limit, teto diário e reserva de entrada configurados.
 
-Abra o dashboard, informe o token administrativo local e use o redrive apenas em dados fictícios. O painel não persiste o token em `localStorage`.
+Rotas da plataforma (`X-Platform-Token`): `POST /v1/platform/tenants`, `POST|DELETE /v1/platform/tenants/:id/webhook-keys[/:keyId]`, `POST|DELETE /v1/platform/tenants/:id/admin-tokens[/:tokenId]` e `GET /v1/platform/queue` (outbox e pendências do Redis Streams, que é compartilhado por todas as lojas).
+
+Abra o dashboard, informe o token administrativo da loja e use o redrive apenas em dados fictícios. O painel não persiste o token em `localStorage`.
 
 ## Verificação e documentação
 

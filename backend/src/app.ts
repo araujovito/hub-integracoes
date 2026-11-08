@@ -12,6 +12,10 @@ import { verifyAdminToken, verifySignature } from './security.js';
 import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
 import { isParsedJson, type ParsedJson } from './json-body.js';
+import {
+  activeWebhookSecrets, createAdminToken, createTenant, createWebhookKey,
+  resolveAdminToken, revokeAdminToken, revokeWebhookKey, TENANT_ID_PATTERN, TenantNotFoundError,
+} from './tenants.js';
 
 export type AppDependencies = {
   pool: Pool;
@@ -27,19 +31,32 @@ export type AppDependencies = {
  */
 export async function buildApp({ pool, redis, secrets, logger = true }: AppDependencies) {
   const app = Fastify({
-    logger: logger ? { redact: ['req.headers.authorization', 'req.headers.x-admin-token', 'req.headers.x-webhook-signature'] } : false,
+    logger: logger ? { redact: ['req.headers.authorization', 'req.headers.x-admin-token', 'req.headers.x-platform-token', 'req.headers.x-webhook-signature'] } : false,
     bodyLimit: 256 * 1024,
     trustProxy: false,
   });
   const dashboardHtml = await readFile(resolve(process.cwd(), '../dashboard/index.html'), 'utf8').catch(() => '<h1>Dashboard asset unavailable</h1>');
 
-  function authorized(request: FastifyRequest): boolean {
-    const header = request.headers['x-admin-token'];
-    return verifyAdminToken(Array.isArray(header) ? header[0] : header, secrets.ADMIN_API_TOKEN);
+  type Reply = { code: (status: number) => { send: (payload: unknown) => unknown } };
+
+  function header(request: FastifyRequest, name: string): string | undefined {
+    const value = request.headers[name];
+    return Array.isArray(value) ? value[0] : value;
   }
 
-  function requireAdmin(request: FastifyRequest, reply: { code: (status: number) => { send: (payload: unknown) => unknown } }): boolean {
-    if (authorized(request)) return true;
+  /**
+   * Tenant that owns the X-Admin-Token, or null after replying 401. Every
+   * operations query is filtered by this id, so a token only sees its own store.
+   */
+  async function requireTenantAdmin(request: FastifyRequest, reply: Reply): Promise<string | null> {
+    const tenantId = await resolveAdminToken(pool, header(request, 'x-admin-token'));
+    if (!tenantId) reply.code(401).send({ error: 'unauthorized' });
+    return tenantId;
+  }
+
+  /** Platform operator (manages stores and their credentials); sees no store data. */
+  function requirePlatformAdmin(request: FastifyRequest, reply: Reply): boolean {
+    if (verifyAdminToken(header(request, 'x-platform-token'), secrets.PLATFORM_ADMIN_TOKEN)) return true;
     reply.code(401).send({ error: 'unauthorized' });
     return false;
   }
@@ -87,51 +104,47 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.get('/v1/operations/summary', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const result = await pool.query(
       `SELECT e.status, count(*)::int AS count,
               coalesce(avg(extract(epoch FROM (e.updated_at - e.received_at))) FILTER (WHERE e.status = 'delivered'), 0)::float AS avg_delivery_seconds
          FROM integration_events e WHERE e.tenant_id = $1 GROUP BY e.status`,
-      [config.DEMO_TENANT_ID],
+      [tenantId],
     );
     const pending = await pool.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM outbox_events o JOIN integration_events e ON e.id=o.integration_event_id
-        WHERE e.tenant_id=$1 AND o.published_at IS NULL`, [config.DEMO_TENANT_ID],
+        WHERE e.tenant_id=$1 AND o.published_at IS NULL`, [tenantId],
     );
     const deadLetters = await pool.query<{ count: number }>(
       `SELECT count(*)::int AS count FROM dead_letter_events d JOIN integration_events e ON e.id=d.integration_event_id
-        WHERE e.tenant_id=$1 AND d.redriven_at IS NULL`, [config.DEMO_TENANT_ID],
+        WHERE e.tenant_id=$1 AND d.redriven_at IS NULL`, [tenantId],
     );
     const oldestPending = await pool.query<{ age_seconds: number | null }>(
       `SELECT extract(epoch FROM (now()-min(o.created_at)))::float AS age_seconds
          FROM outbox_events o JOIN integration_events e ON e.id=o.integration_event_id
-        WHERE e.tenant_id=$1 AND o.published_at IS NULL`, [config.DEMO_TENANT_ID],
+        WHERE e.tenant_id=$1 AND o.published_at IS NULL`, [tenantId],
     );
-    let redisPending = 0;
-    try {
-      const pendingInfo = await redis.call('XPENDING', config.REDIS_STREAM_KEY, config.REDIS_CONSUMER_GROUP) as [number, ...unknown[]];
-      redisPending = pendingInfo[0] ?? 0;
-    } catch {
-      // The stream/group may not exist yet during first startup.
-    }
+    // The Redis stream is shared by all stores, so its pending count is a
+    // platform metric (GET /v1/platform/queue), not part of a store's view.
     return {
       statuses: result.rows,
       unpublishedOutbox: pending.rows[0]?.count ?? 0,
       oldestOutboxAgeSeconds: oldestPending.rows[0]?.age_seconds ?? 0,
-      redisPending,
       deadLetters: deadLetters.rows[0]?.count ?? 0,
     };
   });
 
   app.get('/v1/ai/status', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const usage = await pool.query<{ used_tokens: string }>(
       `SELECT coalesce(sum(total_tokens), 0)::text AS used_tokens FROM ai_token_usage
         WHERE tenant_id=$1 AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
-      [config.DEMO_TENANT_ID],
+      [tenantId],
     );
     const usedTokensToday = Number(usage.rows[0]?.used_tokens ?? '0');
-    const unresolved = await pool.query<{ count: number }>("SELECT count(*)::int AS count FROM ai_request_journal WHERE tenant_id=$1 AND status='pending'", [config.DEMO_TENANT_ID]);
+    const unresolved = await pool.query<{ count: number }>("SELECT count(*)::int AS count FROM ai_request_journal WHERE tenant_id=$1 AND status='pending'", [tenantId]);
     return {
       enabled: isOpenAiConfigured(), provider: 'openai', model: config.OPENAI_MODEL,
       usedTokensToday, dailyTokenLimit: config.OPENAI_DAILY_TOKEN_LIMIT,
@@ -142,13 +155,15 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.get('/v1/ai/unresolved', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
-    const pending = await pool.query("SELECT id, provider_request_id AS \"providerRequestId\", created_at AS \"createdAt\" FROM ai_request_journal WHERE tenant_id=$1 AND status='pending' ORDER BY created_at", [config.DEMO_TENANT_ID]);
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
+    const pending = await pool.query("SELECT id, provider_request_id AS \"providerRequestId\", created_at AS \"createdAt\" FROM ai_request_journal WHERE tenant_id=$1 AND status='pending' ORDER BY created_at", [tenantId]);
     return { requests: pending.rows };
   });
 
   app.post<{ Params: { id: string }; Body: ParsedJson }>('/v1/ai/unresolved/:id/reconcile', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const id = z.string().uuid().safeParse(request.params.id);
     const data = z.object({
       providerRequestId: z.string().min(1).max(300), model: z.string().min(1).max(200),
@@ -158,7 +173,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     }).strict().safeParse(request.body?.value);
     if (!id.success || !data.success) return reply.code(400).send({ error: 'invalid_reconciliation' });
     try {
-      await reconcileAiUsage(pool, id.data, config.DEMO_TENANT_ID, { ...data.data, tenantId: config.DEMO_TENANT_ID, provider: 'openai', task: 'portfolio-token-meter-demo' }, data.data.evidence);
+      await reconcileAiUsage(pool, id.data, tenantId, { ...data.data, tenantId: tenantId, provider: 'openai', task: 'portfolio-token-meter-demo' }, data.data.evidence);
       return { status: 'reconciled' };
     } catch (error) {
       if (error instanceof Error && error.message === 'pending_request_not_found') return reply.code(404).send({ error: 'pending_request_not_found' });
@@ -170,10 +185,11 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.post('/v1/ai/demo', { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     if (!isOpenAiConfigured()) return reply.code(503).send({ error: 'ai_provider_not_configured' });
     try {
-      const result = await runTokenMeterDemo(pool);
+      const result = await runTokenMeterDemo(pool, tenantId);
       request.log.info({ provider: 'openai', model: result.model, requestId: result.requestId,
         ...result.usage, durationMs: result.durationMs }, 'AI token meter demo completed');
       return result;
@@ -191,7 +207,8 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { status?: string; limit?: string; cursor?: string } }>('/v1/operations/events', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const query = z.object({
       status: z.enum(['received', 'queued', 'processing', 'delivered', 'failed']).optional(),
       limit: z.coerce.number().int().min(1).max(100).default(25),
@@ -206,7 +223,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
           AND ($2::text IS NULL OR status = $2)
           AND ($3::uuid IS NULL OR (received_at, id) < (SELECT received_at, id FROM integration_events WHERE id=$3 AND tenant_id=$1))
         ORDER BY received_at DESC, id DESC LIMIT $4`,
-      [config.DEMO_TENANT_ID, query.data.status ?? null, query.data.cursor ?? null, query.data.limit + 1],
+      [tenantId, query.data.status ?? null, query.data.cursor ?? null, query.data.limit + 1],
     );
     const hasMore = result.rows.length > query.data.limit;
     const events = result.rows.slice(0, query.data.limit);
@@ -216,7 +233,8 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { limit?: string } }>('/v1/operations/dead-letters', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
     const result = await pool.query(
@@ -224,7 +242,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
               d.attempts, d.reason, d.failed_at AS "failedAt"
          FROM dead_letter_events d JOIN integration_events e ON e.id=d.integration_event_id
         WHERE e.tenant_id=$1 AND d.redriven_at IS NULL ORDER BY d.failed_at DESC LIMIT $2`,
-      [config.DEMO_TENANT_ID, query.data.limit],
+      [tenantId, query.data.limit],
     );
     return { deadLetters: result.rows };
   });
@@ -232,7 +250,8 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.post<{ Params: { id: string } }>('/v1/operations/dead-letters/:id/redrive', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
     const id = z.string().uuid().safeParse(request.params.id);
     if (!id.success) return reply.code(400).send({ error: 'invalid_id' });
     const client = await pool.connect();
@@ -242,7 +261,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
         `SELECT e.id AS event_id, e.payload, e.tenant_id
            FROM dead_letter_events d JOIN integration_events e ON e.id=d.integration_event_id
           WHERE d.id=$1 AND e.tenant_id=$2 AND d.redriven_at IS NULL FOR UPDATE OF d, e`,
-        [id.data, config.DEMO_TENANT_ID],
+        [id.data, tenantId],
       );
       const row = dead.rows[0];
       if (!row) {
@@ -273,9 +292,14 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   }, async (request, reply) => {
     const body: unknown = request.body;
     if (!isParsedJson(body)) return reply.code(415).send({ error: 'expected_application_json' });
-    const signatureHeader = request.headers['x-webhook-signature'];
-    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
-    if (!verifySignature(body.raw, signature, secrets.WEBHOOK_SECRET)) {
+    const tenantId = header(request, 'x-tenant-id');
+    const signature = header(request, 'x-webhook-signature');
+    const keys = tenantId && TENANT_ID_PATTERN.test(tenantId)
+      ? await activeWebhookSecrets(pool, secrets.TENANT_SECRETS_KEY, tenantId)
+      : [];
+    // Unknown store, disabled store and wrong signature get the same answer,
+    // so the endpoint does not reveal which store ids exist.
+    if (!tenantId || !keys.some((secret) => verifySignature(body.raw, signature, secret))) {
       return reply.code(401).send({ error: 'invalid_signature' });
     }
 
@@ -290,7 +314,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
          VALUES ($1, 'demo-store', $2, $3, $4::jsonb)
          ON CONFLICT (tenant_id, source, external_event_id) DO NOTHING
          RETURNING id`,
-        [config.DEMO_TENANT_ID, order.eventId, order.orderId, JSON.stringify(order)],
+        [tenantId, order.eventId, order.orderId, JSON.stringify(order)],
       );
 
       if (inserted.rowCount === 0) {
@@ -302,7 +326,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
       await client.query(
         `INSERT INTO outbox_events (integration_event_id, event_type, payload)
          VALUES ($1, 'order.received', $2::jsonb)`,
-        [eventId, JSON.stringify({ eventId, tenantId: config.DEMO_TENANT_ID, order })],
+        [eventId, JSON.stringify({ eventId, tenantId: tenantId, order })],
       );
       await client.query('COMMIT');
       return reply.code(202).send({ status: 'accepted', eventId });
@@ -318,7 +342,8 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { from?: string; to?: string } }>('/v1/usage/tokens', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    if (!requireAdmin(request, reply)) return;
+    const tenantId = await requireTenantAdmin(request, reply);
+    if (!tenantId) return;
 
     const dates = request.query;
     const dateSchema = z.object({
@@ -346,14 +371,96 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
          FROM ai_token_usage
         WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
         GROUP BY provider, model, task ORDER BY total_tokens DESC`,
-      [config.DEMO_TENANT_ID, from, to],
+      [tenantId, from, to],
     );
     const totals = await pool.query(
       `SELECT coalesce(sum(total_tokens), 0)::bigint AS total_tokens
          FROM ai_token_usage WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3`,
-      [config.DEMO_TENANT_ID, from, to],
+      [tenantId, from, to],
     );
     return { from, to, summary: totals.rows[0], usage: result.rows };
+  });
+
+
+  // --- Platform operations: manage stores and their credentials -------------
+  // Secrets and tokens are returned exactly once, at creation; afterwards only
+  // ids are visible. Responses are no-store so proxies and browsers keep no copy.
+
+  const tenantParams = z.object({ tenantId: z.string().regex(TENANT_ID_PATTERN) });
+
+  app.get('/v1/platform/queue', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const outbox = await pool.query<{ count: number; age_seconds: number | null }>(
+      `SELECT count(*)::int AS count, extract(epoch FROM (now()-min(created_at)))::float AS age_seconds
+         FROM outbox_events WHERE published_at IS NULL`,
+    );
+    let redisPending = 0;
+    try {
+      const pendingInfo = await redis.call('XPENDING', config.REDIS_STREAM_KEY, config.REDIS_CONSUMER_GROUP) as [number, ...unknown[]];
+      redisPending = pendingInfo[0] ?? 0;
+    } catch {
+      // The stream/group may not exist yet during first startup.
+    }
+    return { unpublishedOutbox: outbox.rows[0]?.count ?? 0, oldestOutboxAgeSeconds: outbox.rows[0]?.age_seconds ?? 0, redisPending };
+  });
+
+  app.post<{ Body: ParsedJson }>('/v1/platform/tenants', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const data = z.object({ id: z.string().regex(TENANT_ID_PATTERN), name: z.string().trim().min(1).max(200) }).strict().safeParse(request.body?.value);
+    if (!data.success) return reply.code(400).send({ error: 'invalid_tenant' });
+    try {
+      await createTenant(pool, data.data.id, data.data.name);
+      return reply.code(201).send({ id: data.data.id, name: data.data.name });
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'tenant_already_exists' });
+      throw error;
+    }
+  });
+
+  app.post<{ Params: { tenantId: string }; Body: ParsedJson }>('/v1/platform/tenants/:tenantId/webhook-keys', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const params = tenantParams.safeParse(request.params);
+    const data = z.object({ graceHours: z.number().min(0).max(24 * 30).default(24) }).strict().safeParse(request.body?.value ?? {});
+    if (!params.success || !data.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      const key = await createWebhookKey(pool, secrets.TENANT_SECRETS_KEY, params.data.tenantId, Math.round(data.data.graceHours * 3600));
+      reply.header('cache-control', 'no-store');
+      return reply.code(201).send({ ...key, previousKeysValidForHours: data.data.graceHours });
+    } catch (error) {
+      if (error instanceof TenantNotFoundError) return reply.code(404).send({ error: 'tenant_not_found' });
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { tenantId: string; keyId: string } }>('/v1/platform/tenants/:tenantId/webhook-keys/:keyId', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const params = tenantParams.extend({ keyId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    const revoked = await revokeWebhookKey(pool, params.data.tenantId, params.data.keyId);
+    return revoked ? reply.code(204).send() : reply.code(404).send({ error: 'key_not_found' });
+  });
+
+  app.post<{ Params: { tenantId: string }; Body: ParsedJson }>('/v1/platform/tenants/:tenantId/admin-tokens', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const params = tenantParams.safeParse(request.params);
+    const data = z.object({ label: z.string().trim().max(100).default('') }).strict().safeParse(request.body?.value ?? {});
+    if (!params.success || !data.success) return reply.code(400).send({ error: 'invalid_request' });
+    try {
+      const token = await createAdminToken(pool, params.data.tenantId, data.data.label);
+      reply.header('cache-control', 'no-store');
+      return reply.code(201).send(token);
+    } catch (error) {
+      if (error instanceof TenantNotFoundError) return reply.code(404).send({ error: 'tenant_not_found' });
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: { tenantId: string; tokenId: string } }>('/v1/platform/tenants/:tenantId/admin-tokens/:tokenId', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const params = tenantParams.extend({ tokenId: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    const revoked = await revokeAdminToken(pool, params.data.tenantId, params.data.tokenId);
+    return revoked ? reply.code(204).send() : reply.code(404).send({ error: 'token_not_found' });
   });
 
   return app;

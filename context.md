@@ -12,8 +12,9 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 - Diretório da API: `backend/`; schema e migrations: `db/migrations/`; Compose: `compose.yaml`.
 - `docker compose up --build` inicia os serviços locais. API: `http://localhost:3000/health`; Postgres/Redis têm portas locais 5433/6380 vinculadas a `127.0.0.1`.
 - Variáveis sensíveis aceitam `NOME_FILE` (lido de arquivo, convenção de Docker secrets/Kubernetes/gerenciadores de segredos): `backend/src/env-files.ts`. Definir `NOME` e `NOME_FILE` juntos é erro.
-- `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` só existem na API: `loadApiSecrets()` em `config.ts` os valida, e relay/worker não os recebem no Compose.
-- O Compose exige `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` no `.env` (`${VAR:?}`); não há senha padrão embutida.
+- Várias lojas (migration `009`, `backend/src/tenants.ts`): chave de webhook por loja (cifrada com `TENANT_SECRETS_KEY`, rotação com carência), token admin por loja (SHA-256), `PLATFORM_ADMIN_TOKEN` só para cadastro. `PLATFORM_ADMIN_TOKEN` e `TENANT_SECRETS_KEY` existem só na API (`loadApiSecrets()`); relay/worker não os recebem. `DEMO_TENANT_ID`, `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` foram removidos.
+- Rotas HTTP montadas em `backend/src/app.ts` (`buildApp`), testadas com `app.inject()` em `backend/test/api.integration.test.ts`, inclusive isolamento entre lojas.
+- O Compose exige `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `PLATFORM_ADMIN_TOKEN` e `TENANT_SECRETS_KEY` no `.env` (`${VAR:?}`); não há senha padrão embutida.
 - `.env` é local e ignorado pelo Git. Nunca leia, imprima, copie, altere ou inclua o conteúdo de `.env` em mensagens, commits, screenshots ou documentos. Use `.env.example` somente como referência de nomes e placeholders.
 - O ambiente já foi criado e os containers estavam rodando. Confirme estado com `docker compose ps` antes de agir; não derrube volumes nem use comandos destrutivos.
 
@@ -34,7 +35,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 
 ## Decisões/limites
 
-- Escopo inicial single-tenant `demo`, com payload sem PII de cliente.
+- Várias lojas desde a migration `009`; a loja `demo` vem do backfill dos dados antigos e não tem chaves até a plataforma emiti-las. Payload sem PII de cliente.
 - A entrega distribuída é *at-least-once*. Duplicatas entre PostgreSQL e Redis são possíveis; a operação do consumidor deve ser idempotente.
 - Preferir migrations aditivas, com `IF NOT EXISTS`, sem apagar dados. Não presumir que o container foi recriado ou o banco está vazio.
 - Segredos e credenciais não devem ir para código, logs, testes reais ou Git. Portas de serviços locais permanecem em loopback.

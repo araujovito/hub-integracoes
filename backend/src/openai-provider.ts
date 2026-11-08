@@ -56,25 +56,25 @@ export function classifyProviderRejection(error: unknown): ProviderRejection | n
 }
 
 /** One fixed, short demo prompt; caller-provided data is never sent to the model. */
-export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
+export async function runTokenMeterDemo(pool: Pool, tenantId: string): Promise<AiDemoResult> {
   if (!isOpenAiConfigured()) throw new Error('openai_not_configured');
   const databaseClient = await pool.connect();
   let budgetLockAcquired = false;
   try {
     const lock = await databaseClient.query<{ acquired: boolean }>(
       'SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired',
-      [`ai-token-budget:${config.DEMO_TENANT_ID}`],
+      [`ai-token-budget:${tenantId}`],
     );
     budgetLockAcquired = lock.rows[0]?.acquired === true;
     if (!budgetLockAcquired) throw new Error('ai_request_in_progress');
 
-    const unresolved = await databaseClient.query('SELECT 1 FROM ai_request_journal WHERE tenant_id=$1 AND status=$2 LIMIT 1', [config.DEMO_TENANT_ID, 'pending']);
+    const unresolved = await databaseClient.query('SELECT 1 FROM ai_request_journal WHERE tenant_id=$1 AND status=$2 LIMIT 1', [tenantId, 'pending']);
     if (unresolved.rowCount) throw new Error('ai_usage_unresolved');
 
     const usedResult = await databaseClient.query<{ used_tokens: string }>(
       `SELECT coalesce(sum(total_tokens), 0)::text AS used_tokens FROM ai_token_usage
         WHERE tenant_id=$1 AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
-      [config.DEMO_TENANT_ID],
+      [tenantId],
     );
     const usedToday = Number(usedResult.rows[0]?.used_tokens ?? '0');
     const maxOutputTokens = allowedOutputTokens(
@@ -89,7 +89,7 @@ export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
     // Commit the intent before the provider call. A crash or ambiguous network error
     // leaves an unresolved entry and blocks further calls until reconciliation.
     const journal = await databaseClient.query<{ id: string }>(
-      'INSERT INTO ai_request_journal (tenant_id) VALUES ($1) RETURNING id', [config.DEMO_TENANT_ID],
+      'INSERT INTO ai_request_journal (tenant_id) VALUES ($1) RETURNING id', [tenantId],
     );
     const journalId = journal.rows[0]!.id;
     const startedAt = Date.now();
@@ -123,7 +123,7 @@ export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
     await databaseClient.query('BEGIN');
     try {
       await recordTokenUsage(databaseClient, {
-      tenantId: config.DEMO_TENANT_ID,
+      tenantId: tenantId,
       task: 'portfolio-token-meter-demo',
       provider: 'openai',
       model: response.model,
@@ -147,7 +147,7 @@ export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
   } finally {
     let releaseWithError = false;
     if (budgetLockAcquired) {
-      releaseWithError = !(await databaseClient.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [`ai-token-budget:${config.DEMO_TENANT_ID}`]).then(() => true, () => false));
+      releaseWithError = !(await databaseClient.query('SELECT pg_advisory_unlock(hashtextextended($1, 0))', [`ai-token-budget:${tenantId}`]).then(() => true, () => false));
     }
     databaseClient.release(releaseWithError);
   }
