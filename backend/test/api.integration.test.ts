@@ -5,6 +5,7 @@ import { config } from '../src/config.js';
 import { buildApp } from '../src/app.js';
 import { signPayload } from '../src/security.js';
 import { createIsolatedDatabase } from './helpers/isolated-db.js';
+import { createPool } from '../src/database.js';
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === 'true';
 const suite = enabled ? describe : describe.skip;
@@ -181,5 +182,19 @@ suite('HTTP API with multiple stores', () => {
     const revoke = await app.inject({ method: 'DELETE', url: `/v1/platform/tenants/${storeB.id}/admin-tokens/${storeB.adminTokenId}`, headers: platform });
     expect(revoke.statusCode).toBe(204);
     expect((await asAdmin(storeB, '/v1/operations/summary')).statusCode).toBe(401);
+  });
+
+  it('answers 503 without internal details when the database is unreachable', async () => {
+    const unreachable = createPool('test', { connectionString: 'postgres://nobody:nothing@127.0.0.1:1/none', connectionTimeoutMillis: 500 });
+    const offline = await buildApp({ pool: unreachable, redis, secrets, logger: false });
+    try {
+      const response = await offline.inject({ method: 'GET', url: '/v1/operations/summary', headers: { 'x-admin-token': 'hub_adm_anything' } });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toEqual({ error: 'temporarily_unavailable' });
+      expect(response.body).not.toMatch(/127\.0\.0\.1|ECONNREFUSED|postgres/i);
+    } finally {
+      await offline.close();
+      await unreachable.end();
+    }
   });
 });

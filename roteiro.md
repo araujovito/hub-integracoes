@@ -36,13 +36,13 @@ Redis Streams com consumer groups permite distribuir mensagens e mantê-las pend
 3. Criar worker com consumer group, reconhecimento somente depois do commit do efeito no banco e recuperação de pendências antigas com `XAUTOCLAIM`.
 4. Implementar ERP simulado numa tabela de entregas com chave única por tenant/evento; uma repetição não cria efeito duplicado.
 5. Contabilizar tentativas, falha terminal e dead-letter; redrive transacional pela outbox implementado e validado ponta a ponta (202 → outbox → relay → worker → uma entrega).
-6. Testes de integração cobrem migrations repetíveis, ledger de tokens idempotente, lock concorrente do teto de tokens, dedupe concorrente, limite de retries/DLQ, recuperação via XAUTOCLAIM e indisponibilidade Redis seguida de recuperação da outbox com evento preservado. Testes manuais com processos reais confirmaram recuperação após Redis indisponível e após worker parado/reiniciado; ambos entregaram uma vez e os dados foram removidos. Ainda falta automatizar crash/restart dos processos ponta a ponta.
+6. Testes de integração cobrem migrations repetíveis, ledger de tokens idempotente, lock concorrente do teto de tokens, dedupe concorrente, limite de retries/DLQ, recuperação via XAUTOCLAIM e indisponibilidade Redis seguida de recuperação da outbox com evento preservado. Testes manuais com processos reais confirmaram recuperação após Redis indisponível e após worker parado/reiniciado; ambos entregaram uma vez e os dados foram removidos. Crash/restart ponta a ponta automatizado em `scripts/e2e-resilience.sh`.
 
 ### 2. Operação e observabilidade (MVP local implementado; endurecimento pendente)
 
 1. Expor contagens de recebidos, fila, entregues, falhos, pendentes e dead-letter sem incluir payload/segredos (feito no MVP).
 2. Logs estruturados com `eventId`, correlação e resultado já mascaram os headers de autenticação; revisar logging ao adicionar integrações externas.
-3. Relay e worker agora mantêm o processo vivo em falhas transitórias e tentam novamente com backoff exponencial limitado e jitter. Ainda faltam timeouts SQL explícitos e política de concorrência/carga sustentada.
+3. Relay e worker agora mantêm o processo vivo em falhas transitórias e tentam novamente com backoff exponencial limitado e jitter. Processos sobrevivem a queda do PostgreSQL (pool com tratamento de `error`, espera do banco na partida, 503 em vez de 500). Ainda faltam timeouts SQL por consulta (`statement_timeout`).
 4. Retenção implementada (serviço `maintenance`): trim do stream só de entradas confirmadas e lidas, e remoção de payloads entregues após `DATA_RETENTION_DAYS`. Falta alerta automático de backlog; a idade do evento mais antigo já sai em `/v1/platform/queue`.
 5. Health/readiness distintos: `/health` informa liveness; `/ready` verifica dependências (implementado).
 
@@ -74,7 +74,7 @@ Redis Streams com consumer groups permite distribuir mensagens e mantê-las pend
 ### 6. Qualidade, deploy e apresentação (CI, auditoria de dependências e documentação base implementadas)
 
 1. CI executa typecheck, testes unitários/de integração, build, lint, auditoria de dependências e secret scan.
-2. Testes automatizados cobrem recuperação da outbox após falha Redis e recuperação de mensagem pendente via XAUTOCLAIM. Foram validadas manualmente recuperação do relay/worker após indisponibilidade breve do Redis e recuperação da fila após parada/reinício do worker, ambas com entrega única. Ainda faltam testes automatizados de indisponibilidade PostgreSQL, crash/restart do worker e carga sustentada. Foi feito burst local controlado de 30 pedidos + 30 duplicatas concorrentes, com 30 entregas únicas.
+2. Testes automatizados cobrem recuperação da outbox após falha Redis e recuperação de mensagem pendente via XAUTOCLAIM. Foram validadas manualmente recuperação do relay/worker após indisponibilidade breve do Redis e recuperação da fila após parada/reinício do worker, ambas com entrega única. `scripts/e2e-resilience.sh` automatiza indisponibilidade do PostgreSQL, crash (SIGKILL) e reinício do worker sob carga sustentada, conferindo entrega única de cada pedido aceito. Foi feito burst local controlado de 30 pedidos + 30 duplicatas concorrentes, com 30 entregas únicas.
 3. Docker executa como usuário não-root; tags das imagens base são explícitas, mas ainda não fixadas por digest. As ações do CI estão fixadas por SHA de commit, com o Dependabot propondo atualizações, e o gitleaks é baixado com versão e checksum fixos; as imagens Docker (Node, PostgreSQL, Redis) também estão fixadas por digest, com o Dependabot propondo novos digests.
 4. Guia local de demonstração, diagrama, decisões ADR, limitações conhecidas e threat model resumido.
 5. Só então considerar deploy de demonstração com dados fictícios, orçamento/limites e segredos gerenciados.

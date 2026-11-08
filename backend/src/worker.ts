@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
 import { Redis } from 'ioredis';
 import { config } from './config.js';
 import { deliverEvent } from './delivery.js';
 import { recordDeliveryFailure } from './failures.js';
-import { runMigrations } from './migrations.js';
+import { createPool, migrateWhenReady } from './database.js';
 
 type StreamEntry = [string, string[]];
 type StreamBatch = [string, StreamEntry[]][];
 
-const pool = new Pool({ connectionString: config.DATABASE_URL, max: 5 });
+const pool = createPool('worker', { connectionString: config.DATABASE_URL, max: 5 });
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2, enableOfflineQueue: false });
 const consumer = `${config.WORKER_CONSUMER}-${randomUUID()}`;
 let stopping = false;
@@ -90,7 +89,7 @@ process.on('SIGINT', () => { stopping = true; });
 process.on('SIGTERM', () => { stopping = true; });
 
 try {
-  await runMigrations(pool);
+  await migrateWhenReady(pool, 'worker', () => stopping);
   await ensureConsumerGroup();
   console.info(JSON.stringify({ service: 'worker', consumer, group: config.REDIS_CONSUMER_GROUP }));
   let failures = 0;

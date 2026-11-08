@@ -20,3 +20,18 @@ describe('stream trim floor', () => {
     expect(safeTrimId('3000-1', '3000-2', null)).toBe('3000-1');
   });
 });
+
+describe('transient database errors', async () => {
+  const { isTransientDatabaseError } = await import('../src/database.js');
+  it('treats connection failures and server shutdowns as transient', () => {
+    expect(isTransientDatabaseError(Object.assign(new Error('x'), { code: 'ECONNREFUSED' }))).toBe(true);
+    expect(isTransientDatabaseError(Object.assign(new Error('x'), { code: '57P01' }))).toBe(true);
+    expect(isTransientDatabaseError(new Error('Connection terminated unexpectedly'))).toBe(true);
+  });
+
+  it('does not hide real bugs as unavailability', () => {
+    expect(isTransientDatabaseError(Object.assign(new Error('x'), { code: '42P01' }))).toBe(false); // undefined_table
+    expect(isTransientDatabaseError(new TypeError('cannot read properties of undefined'))).toBe(false);
+    expect(isTransientDatabaseError(undefined)).toBe(false);
+  });
+});

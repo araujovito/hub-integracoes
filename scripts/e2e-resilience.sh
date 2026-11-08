@@ -82,6 +82,10 @@ FAIL=0
 [ "$NOT_DELIVERED" -eq 0 ] || { log "FAIL: events left undelivered"; FAIL=1; }
 [ "$DEAD" -eq 0 ] || { log "FAIL: dead letters during transient outages"; FAIL=1; }
 [ "$UNPUBLISHED" -eq 0 ] || { log "FAIL: outbox not drained"; FAIL=1; }
+read -r API_RESTARTS RELAY_RESTARTS _ <<<"$RESTARTS"
+[ "$API_RESTARTS" -eq 0 ] && [ "$RELAY_RESTARTS" -eq 0 ] || { log "FAIL: api/relay restarted during the database outage"; FAIL=1; }
+NETWORK_ERRORS=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["httpStatus"].get("network",0))' "$WORK/report.json")
+[ "$NETWORK_ERRORS" -eq 0 ] || { log "FAIL: $NETWORK_ERRORS requests got no HTTP answer (API down instead of 503)"; FAIL=1; }
 if [ "$FAIL" -ne 0 ]; then
   log "service logs (last 40 lines each):"
   for service in api relay worker; do compose logs --tail 40 "$service" 2>&1 | cut -c1-240; done

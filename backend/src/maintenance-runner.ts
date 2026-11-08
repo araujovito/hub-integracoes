@@ -1,10 +1,9 @@
-import { Pool } from 'pg';
 import { Redis } from 'ioredis';
 import { config } from './config.js';
-import { runMigrations } from './migrations.js';
+import { createPool, migrateWhenReady } from './database.js';
 import { applyRetention, trimStream } from './maintenance.js';
 
-const pool = new Pool({ connectionString: config.DATABASE_URL, max: 2 });
+const pool = createPool('maintenance', { connectionString: config.DATABASE_URL, max: 2 });
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2, enableOfflineQueue: false });
 let stopping = false;
 let wake: (() => void) | undefined;
@@ -33,7 +32,7 @@ async function runOnce(): Promise<void> {
 }
 
 try {
-  await runMigrations(pool);
+  await migrateWhenReady(pool, 'maintenance', () => stopping);
   console.info(JSON.stringify({ service: 'maintenance', streamRetentionHours: config.STREAM_RETENTION_HOURS,
     dataRetentionDays: config.DATA_RETENTION_DAYS, intervalSeconds: config.MAINTENANCE_INTERVAL_SECONDS }));
   while (!stopping) {

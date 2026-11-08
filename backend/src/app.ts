@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from 'fastify';
+import Fastify, { type FastifyError, type FastifyRequest } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import type { Pool } from 'pg';
 import type { Redis } from 'ioredis';
@@ -12,6 +12,7 @@ import { isFreshTimestamp, parseWebhookTimestamp, verifyAdminToken, verifySignat
 import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
 import { isParsedJson, type ParsedJson } from './json-body.js';
+import { isTransientDatabaseError } from './database.js';
 import {
   activeWebhookSecrets, createAdminToken, createTenant, createWebhookKey,
   resolveAdminToken, revokeAdminToken, revokeWebhookKey, TENANT_ID_PATTERN, TenantNotFoundError,
@@ -60,6 +61,22 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     reply.code(401).send({ error: 'unauthorized' });
     return false;
   }
+
+  // Never return internal error messages (hostnames, SQL, stack details).
+  // Client errors raised by Fastify itself (4xx) keep their status and message.
+  app.setErrorHandler((rawError, request, reply) => {
+    const error = rawError as FastifyError;
+    const statusCode = error.statusCode;
+    if (statusCode && statusCode >= 400 && statusCode < 500) {
+      return reply.code(statusCode).send({ error: error.code ?? 'bad_request', message: error.message });
+    }
+    if (isTransientDatabaseError(error) || (error as { name?: string }).name === 'MaxRetriesPerRequestError') {
+      request.log.warn({ err: error }, 'dependency unavailable');
+      return reply.code(503).send({ error: 'temporarily_unavailable' });
+    }
+    request.log.error({ err: error }, 'unhandled error');
+    return reply.code(500).send({ error: 'internal_error' });
+  });
 
   app.removeContentTypeParser('application/json');
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_request, body, done) => {

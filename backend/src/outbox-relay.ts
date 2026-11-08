@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { Pool } from 'pg';
 import { Redis } from 'ioredis';
 import { config } from './config.js';
-import { runMigrations } from './migrations.js';
+import { createPool, migrateWhenReady } from './database.js';
 import { publishOutboxBatch } from './outbox-publisher.js';
 
-const pool = new Pool({ connectionString: config.DATABASE_URL, max: 5 });
+const pool = createPool('outbox-relay', { connectionString: config.DATABASE_URL, max: 5 });
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2, enableOfflineQueue: false });
 const batchSize = 25;
 
@@ -21,7 +20,7 @@ function retryDelay(attempt: number): number {
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 try {
-  await runMigrations(pool);
+  await migrateWhenReady(pool, 'outbox-relay', () => stopping);
   const consumer = randomUUID();
   console.info(JSON.stringify({ service: 'outbox-relay', consumer, stream: config.REDIS_STREAM_KEY }));
   let failures = 0;
