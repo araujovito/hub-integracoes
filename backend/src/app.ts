@@ -288,7 +288,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.post<{ Body: ParsedJson }>('/v1/webhooks/orders', {
-    config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+    config: { rateLimit: { max: config.WEBHOOK_RATE_LIMIT_PER_MINUTE, timeWindow: '1 minute' } },
   }, async (request, reply) => {
     const body: unknown = request.body;
     if (!isParsedJson(body)) return reply.code(415).send({ error: 'expected_application_json' });

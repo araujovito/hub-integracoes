@@ -11,6 +11,8 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
+  // Per client IP (load tests raise it; one machine sends everything).
+  WEBHOOK_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(120),
   // Max distance between a webhook's signed timestamp and the server clock.
   WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().min(30).max(3600).default(300),
   REDIS_STREAM_KEY: z.string().min(1).default('integration:orders'),
