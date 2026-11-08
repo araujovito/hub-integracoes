@@ -7,7 +7,8 @@
 #   1. kills the worker with SIGKILL mid-flight and starts it again;
 #   2. stops PostgreSQL and starts it again.
 # Then checks that every accepted order was delivered exactly once, with no
-# dead letters and nothing stuck in the outbox. Tears everything down at the end.
+# dead letters and nothing stuck in the outbox, takes a backup and proves it
+# restores (scripts/restore-test.sh). Tears everything down at the end.
 #
 # Usage: scripts/e2e-resilience.sh [duration_seconds] [rate_per_second]
 set -euo pipefail
@@ -92,3 +93,13 @@ if [ "$FAIL" -ne 0 ]; then
   exit 1
 fi
 log "PASS: every accepted order delivered exactly once"
+
+# Backup taken right after the outages, then restored and checked by the app.
+log "backup + restore test"
+COMPOSE_ARGS="-p $PROJECT --env-file $ENV_FILE -f $ROOT/compose.yaml" "$ROOT/scripts/backup.sh" "$WORK/backups" >/dev/null
+RESTORE_OUTPUT=$("$ROOT/scripts/restore-test.sh" "$(ls -1 "$WORK"/backups/hub-*.dump | tail -1)")
+echo "$RESTORE_OUTPUT"
+RESTORED_EVENTS=$(echo "$RESTORE_OUTPUT" | python3 -c 'import json,sys;print([json.loads(l) for l in sys.stdin if l.startswith("{")][0]["rows"]["integration_events"])')
+LIVE_EVENTS=$(sql "SELECT count(*) FROM integration_events")
+[ "$RESTORED_EVENTS" -eq "$LIVE_EVENTS" ] || { log "FAIL: restored $RESTORED_EVENTS events, live database has $LIVE_EVENTS"; exit 1; }
+log "PASS: backup restorable ($RESTORED_EVENTS events)"

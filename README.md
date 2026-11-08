@@ -101,7 +101,7 @@ curl -H "X-Admin-Token: $STORE_ADMIN_TOKEN" \
 - O banco usa chaves únicas para impedir duplicação e uma outbox para não separar a persistência do evento da intenção de publicá-lo.
 - Cada token administrativo é de uma loja e todas as consultas de operações filtram por ela; testes de integração cobrem o acesso cruzado (eventos, cursor, dead letters, redrive).
 - A API é stateless e pode escalar horizontalmente; os workers poderão escalar pela fila. A entrega deve ser tratada como *at-least-once*, com idempotência também no consumidor.
-- Ainda falta restauração de backups testada (ver `roteiro.md`).
+- Limites que continuam valendo estão em `roteiro.md` e no modelo de ameaças.
 
 ## Operações
 
@@ -132,6 +132,18 @@ DOMAIN=hub.exemplo.com.br docker compose -f compose.prod.yaml up -d --build
 - **Rede:** só o Caddy publica portas. PostgreSQL, Redis e a API ficam acessíveis apenas dentro da rede do Compose. A API confia em exatamente um proxy (`TRUST_PROXY_HOPS=1`), então limite por IP e logs usam o IP real do cliente.
 - **Segredos:** arquivos em `./secrets`, montados como Docker secrets e lidos pela convenção `*_FILE`. Nenhum segredo vai para variáveis de ambiente nem aparece no `docker inspect`. A senha do Redis fica num arquivo de configuração, não na linha de comando. Para usar um gerenciador de segredos (Vault, AWS/GCP Secret Manager), basta o agente dele gravar os mesmos arquivos.
 - **`TENANT_SECRETS_KEY`** é a chave que decifra as chaves de webhook das lojas. Guarde uma cópia dela separada dos backups do banco: sem ela, um backup restaurado não verifica nenhum webhook.
+
+## Backup e restauração
+
+```bash
+COMPOSE_ARGS="-f compose.prod.yaml" scripts/backup.sh /caminho/backups   # pg_dump + .sha256, mantém os 14 mais recentes
+scripts/restore-test.sh /caminho/backups/hub-<data>.dump                  # prova que o backup restaura
+```
+
+- `backup.sh` gera um dump consistente (`pg_dump`, formato custom), confere que ele é legível antes de dar o arquivo por concluído e grava o SHA-256. Agende com cron ou um timer do systemd, e copie os dumps para um armazenamento **cifrado e fora do servidor**: eles contêm dados de pedidos.
+- `restore-test.sh` confere o checksum, restaura num PostgreSQL descartável (mesma imagem da produção) com `--exit-on-error` e roda a imagem da aplicação contra o banco restaurado. As migrations precisam bater pelo checksum, e o script mostra a contagem das tabelas. Não toca na stack em execução. O teste de resiliência do CI faz backup e restauração a cada push e compara a contagem com o banco de origem.
+- Restaurar de verdade é uma decisão de operação: parar api/relay/worker/maintenance e rodar `pg_restore --clean --if-exists` no banco de produção. Isso substitui os dados atuais, então não está automatizado.
+- O dump não contém `TENANT_SECRETS_KEY`. Sem essa chave, as chaves de webhook restauradas não podem ser lidas e as lojas precisam de chaves novas.
 
 ## Verificação e documentação
 
