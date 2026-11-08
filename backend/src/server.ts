@@ -117,7 +117,7 @@ app.get('/v1/operations/summary', { config: { rateLimit: { max: 60, timeWindow: 
   };
 });
 
-app.get('/v1/ai/status', async (request, reply) => {
+app.get('/v1/ai/status', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
   if (!requireAdmin(request, reply)) return;
   const usage = await pool.query<{ used_tokens: string }>(
     `SELECT coalesce(sum(total_tokens), 0)::text AS used_tokens FROM ai_token_usage
