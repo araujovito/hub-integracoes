@@ -10,8 +10,6 @@ const schema = z.object({
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   DEMO_TENANT_ID: z.string().min(1).max(100).default('demo'),
-  WEBHOOK_SECRET: z.string().min(32),
-  ADMIN_API_TOKEN: z.string().min(32),
   REDIS_STREAM_KEY: z.string().min(1).default('integration:orders'),
   REDIS_CONSUMER_GROUP: z.string().min(1).default('erp-simulator'),
   WORKER_CONSUMER: z.string().min(1).default('worker-local'),
@@ -26,3 +24,14 @@ const schema = z.object({
 });
 
 export const config = schema.parse(process.env);
+
+// Secrets only the HTTP API uses. Kept out of `config` so the relay and worker
+// start without them and the Compose file does not have to hand them over.
+const apiSecretsSchema = z.object({
+  WEBHOOK_SECRET: z.string().min(32),
+  ADMIN_API_TOKEN: z.string().min(32),
+});
+
+export function loadApiSecrets(): z.infer<typeof apiSecretsSchema> {
+  return apiSecretsSchema.parse(process.env);
+}

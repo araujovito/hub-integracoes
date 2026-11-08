@@ -6,13 +6,15 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { config } from './config.js';
+import { config, loadApiSecrets } from './config.js';
 import { runMigrations } from './migrations.js';
 import { orderSchema } from './orders.js';
 import { verifyAdminToken, verifySignature } from './security.js';
 import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
 import { isParsedJson, type ParsedJson } from './json-body.js';
+
+const secrets = loadApiSecrets();
 
 const app = Fastify({
   logger: { redact: ['req.headers.authorization', 'req.headers.x-admin-token', 'req.headers.x-webhook-signature'] },
@@ -25,7 +27,7 @@ const dashboardHtml = await readFile(resolve(process.cwd(), '../dashboard/index.
 
 function authorized(request: FastifyRequest): boolean {
   const header = request.headers['x-admin-token'];
-  return verifyAdminToken(Array.isArray(header) ? header[0] : header, config.ADMIN_API_TOKEN);
+  return verifyAdminToken(Array.isArray(header) ? header[0] : header, secrets.ADMIN_API_TOKEN);
 }
 
 function requireAdmin(request: FastifyRequest, reply: { code: (status: number) => { send: (payload: unknown) => unknown } }): boolean {
@@ -267,7 +269,7 @@ app.post<{ Body: ParsedJson }>('/v1/webhooks/orders', {
   if (!isParsedJson(body)) return reply.code(415).send({ error: 'expected_application_json' });
   const signatureHeader = request.headers['x-webhook-signature'];
   const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
-  if (!verifySignature(body.raw, signature, config.WEBHOOK_SECRET)) {
+  if (!verifySignature(body.raw, signature, secrets.WEBHOOK_SECRET)) {
     return reply.code(401).send({ error: 'invalid_signature' });
   }
 
