@@ -8,7 +8,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 
 ## Stack e execução
 
-- Node.js 20, TypeScript, Fastify, Zod, PostgreSQL 17, Redis 7.4, Docker Compose.
+- Node.js 24 LTS (imagem e CI; 22+ para desenvolvimento local), TypeScript, Fastify, Zod, PostgreSQL 17, Redis 7.4, Docker Compose.
 - Diretório da API: `backend/`; schema e migrations: `db/migrations/`; Compose: `compose.yaml`.
 - `docker compose up --build` inicia os serviços locais. API: `http://localhost:3000/health`; Postgres/Redis têm portas locais 5433/6380 vinculadas a `127.0.0.1`.
 - `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` só existem na API: `loadApiSecrets()` em `config.ts` os valida, e relay/worker não os recebem no Compose.

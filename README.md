@@ -4,7 +4,7 @@ Projeto de portfólio para receber eventos de pedidos, validá-los, persistir a 
 
 ## Ambiente local
 
-Requisitos: Node.js 20+, Yarn 1.22+ e Docker Compose.
+Requisitos: Node.js 22+ (a imagem Docker e o CI usam Node.js 24 LTS), Yarn 1.22+ e Docker Compose.
 
 ```bash
 cp .env.example .env

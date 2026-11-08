@@ -1,4 +1,4 @@
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app/backend
 COPY backend/package.json backend/yarn.lock* ./
 RUN corepack enable && yarn install --frozen-lockfile
@@ -6,7 +6,7 @@ COPY backend/tsconfig.json ./
 COPY backend/src ./src
 RUN yarn build
 
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app/backend
 COPY backend/package.json backend/yarn.lock* ./
