@@ -37,6 +37,24 @@ export function mapOpenAiUsage(usage: {
   };
 }
 
+/**
+ * HTTP statuses with which the provider refuses a request before generating
+ * anything (bad request, auth, permission, unknown model, validation, rate or
+ * quota limit). Treated as "no tokens consumed". Timeouts, connection errors and
+ * 5xx stay ambiguous: the request may have run, so usage remains unknown.
+ */
+const REJECTED_BEFORE_GENERATION = new Set([400, 401, 403, 404, 422, 429]);
+
+export type ProviderRejection = { status: number; requestId: string | null };
+
+/** Classify a provider error as a definitive rejection, or null when usage is unknown. */
+export function classifyProviderRejection(error: unknown): ProviderRejection | null {
+  if (typeof error !== 'object' || error === null) return null;
+  const { status, requestID } = error as { status?: unknown; requestID?: unknown };
+  if (typeof status !== 'number' || !REJECTED_BEFORE_GENERATION.has(status)) return null;
+  return { status, requestId: typeof requestID === 'string' && requestID ? requestID.slice(0, 300) : null };
+}
+
 /** One fixed, short demo prompt; caller-provided data is never sent to the model. */
 export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
   if (!isOpenAiConfigured()) throw new Error('openai_not_configured');
@@ -75,12 +93,29 @@ export async function runTokenMeterDemo(pool: Pool): Promise<AiDemoResult> {
     );
     const journalId = journal.rows[0]!.id;
     const startedAt = Date.now();
-    const response = await openAiClient.responses.create({
-      model: config.OPENAI_MODEL,
-      input: 'Explique em uma frase curta, em português, o que uma outbox transacional resolve em uma integração de pedidos.',
-      max_output_tokens: maxOutputTokens,
-      store: false,
-    });
+    let response: OpenAI.Responses.Response;
+    try {
+      response = await openAiClient.responses.create({
+        model: config.OPENAI_MODEL,
+        input: 'Explique em uma frase curta, em português, o que uma outbox transacional resolve em uma integração de pedidos.',
+        max_output_tokens: maxOutputTokens,
+        store: false,
+      });
+    } catch (error) {
+      const rejection = classifyProviderRejection(error);
+      if (rejection) {
+        // Definitive refusal: close the intent so it does not block later calls.
+        // If this update fails, the entry stays pending (the safe default).
+        await databaseClient.query(
+          "UPDATE ai_request_journal SET status='rejected', provider_status=$2, provider_request_id=$3, recorded_at=now() WHERE id=$1",
+          [journalId, rejection.status, rejection.requestId],
+        );
+      }
+      throw error;
+    }
+    // Keep the provider ID on the intent as soon as it is known, so an entry that
+    // stays pending (e.g. usage missing or the ledger write failing) can be reconciled.
+    await databaseClient.query('UPDATE ai_request_journal SET provider_request_id=$2 WHERE id=$1', [journalId, response.id]);
     const usage = response.usage;
     if (!usage) throw new Error('provider_usage_unavailable');
 

@@ -135,7 +135,7 @@ app.get('/v1/ai/status', async (request, reply) => {
 
 app.get('/v1/ai/unresolved', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
   if (!requireAdmin(request, reply)) return;
-  const pending = await pool.query("SELECT id, created_at AS \"createdAt\" FROM ai_request_journal WHERE tenant_id=$1 AND status='pending' ORDER BY created_at", [config.DEMO_TENANT_ID]);
+  const pending = await pool.query("SELECT id, provider_request_id AS \"providerRequestId\", created_at AS \"createdAt\" FROM ai_request_journal WHERE tenant_id=$1 AND status='pending' ORDER BY created_at", [config.DEMO_TENANT_ID]);
   return { requests: pending.rows };
 });
 

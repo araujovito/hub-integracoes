@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeTokenUsage } from '../src/token-usage.js';
-import { allowedOutputTokens, mapOpenAiUsage } from '../src/openai-provider.js';
+import { allowedOutputTokens, classifyProviderRejection, mapOpenAiUsage } from '../src/openai-provider.js';
 
 describe('token usage ledger normalization', () => {
   const base = {
@@ -37,5 +37,15 @@ describe('token usage ledger normalization', () => {
     expect(allowedOutputTokens(1_000, 5_000, 96, 256)).toBe(96);
     expect(allowedOutputTokens(4_700, 5_000, 96, 256)).toBe(44);
     expect(() => allowedOutputTokens(4_800, 5_000, 96, 256)).toThrow('daily_token_limit_reached');
+  });
+
+  it('treats provider refusals as definitive and leaves ambiguous failures unresolved', () => {
+    expect(classifyProviderRejection({ status: 401, requestID: 'req_abc' })).toEqual({ status: 401, requestId: 'req_abc' });
+    expect(classifyProviderRejection({ status: 404 })).toEqual({ status: 404, requestId: null });
+    // Timeouts, connection failures (no status) and 5xx may have consumed tokens.
+    expect(classifyProviderRejection({ status: 500, requestID: 'req_x' })).toBeNull();
+    expect(classifyProviderRejection({ status: undefined })).toBeNull();
+    expect(classifyProviderRejection(new Error('Request timed out.'))).toBeNull();
+    expect(classifyProviderRejection(undefined)).toBeNull();
   });
 });

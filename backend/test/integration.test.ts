@@ -53,7 +53,7 @@ suite('local integration services', () => {
     const result = await pool!.query("SELECT to_regclass('erp_deliveries') AS table_name");
     expect(result.rows[0]?.table_name).toBe('erp_deliveries');
     const migrations = await pool!.query('SELECT count(*)::int AS count FROM schema_migrations');
-    expect(migrations.rows[0]?.count).toBe(7);
+    expect(migrations.rows[0]?.count).toBe(8);
   });
 
   it('keeps an outbox event pending through Redis outage and publishes it after recovery', async () => {
@@ -134,6 +134,26 @@ suite('local integration services', () => {
       const reconciledUsage = { tenantId: config.DEMO_TENANT_ID, task: 'portfolio-token-meter-demo', provider: 'openai', model: 'test-model', providerRequestId: 'test-reconciled', inputTokens: 12, outputTokens: 3, totalTokens: 15 };
       await reconcileAiUsage(pool!, pending.rows[0].id, config.DEMO_TENANT_ID, reconciledUsage, 'verified test usage');
       await expect(reconcileAiUsage(pool!, pending.rows[0].id, config.DEMO_TENANT_ID, reconciledUsage, 'verified test usage')).rejects.toThrow('pending_request_not_found');
+      expect((await pool!.query("SELECT count(*)::int AS count FROM ai_request_journal WHERE status='pending'")).rows[0].count).toBe(0);
+    } finally {
+      config.OPENAI_API_KEY = previousKey;
+    }
+  });
+
+  it('closes the intent on a provider refusal so later calls are not blocked', async () => {
+    const previousKey = config.OPENAI_API_KEY;
+    config.OPENAI_API_KEY = 'test-key';
+    const usage = { input_tokens: 12, output_tokens: 3, total_tokens: 15,
+      input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } };
+    provider.create.mockReset();
+    provider.create.mockRejectedValueOnce(Object.assign(new Error('model not found'), { status: 404, requestID: 'test-rejected' }));
+    provider.create.mockResolvedValueOnce({ id: 'test-after-rejection', model: 'test-model', output_text: 'ok', usage });
+    try {
+      await expect(runTokenMeterDemo(pool!)).rejects.toThrow('model not found');
+      const rejected = await pool!.query("SELECT status, provider_status, provider_request_id FROM ai_request_journal WHERE provider_request_id='test-rejected'");
+      expect(rejected.rows).toEqual([{ status: 'rejected', provider_status: 404, provider_request_id: 'test-rejected' }]);
+      const result = await runTokenMeterDemo(pool!);
+      expect(result.requestId).toBe('test-after-rejection');
       expect((await pool!.query("SELECT count(*)::int AS count FROM ai_request_journal WHERE status='pending'")).rows[0].count).toBe(0);
     } finally {
       config.OPENAI_API_KEY = previousKey;
