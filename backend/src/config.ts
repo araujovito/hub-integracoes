@@ -35,6 +35,8 @@ const apiSecretsSchema = z.object({
   ADMIN_API_TOKEN: z.string().min(32),
 });
 
-export function loadApiSecrets(): z.infer<typeof apiSecretsSchema> {
+export type ApiSecrets = z.infer<typeof apiSecretsSchema>;
+
+export function loadApiSecrets(): ApiSecrets {
   return apiSecretsSchema.parse(env);
 }
