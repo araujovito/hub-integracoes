@@ -1,0 +1,43 @@
+{
+  "name": "@hub-integracoes/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "dev:relay": "tsx watch src/outbox-relay.ts",
+    "dev:worker": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "start:relay": "node dist/outbox-relay.js",
+    "start:worker": "node dist/worker.js",
+    "test": "vitest run",
+    "test:integration": "RUN_INTEGRATION_TESTS=true vitest run test/integration.test.ts",
+    "lint": "eslint src test eslint.config.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "resolutions": {
+    "light-my-request": "6.6.0",
+    "minimatch": "^11.0.1"
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^10.3.0",
+    "dotenv": "^16.6.1",
+    "fastify": "^5.6.2",
+    "ioredis": "^5.8.2",
+    "openai": "5.20.0",
+    "pg": "^8.16.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.18.12",
+    "@types/pg": "^8.15.5",
+    "eslint": "^10.14.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.6",
+    "vitest": "4.1.12"
+  }
+}
