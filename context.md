@@ -11,6 +11,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 - Node.js 24 LTS (imagem e CI; 22+ para desenvolvimento local), TypeScript, Fastify, Zod, PostgreSQL 17, Redis 7.4, Docker Compose.
 - Diretório da API: `backend/`; schema e migrations: `db/migrations/`; Compose: `compose.yaml`.
 - `docker compose up --build` inicia os serviços locais. API: `http://localhost:3000/health`; Postgres/Redis têm portas locais 5433/6380 vinculadas a `127.0.0.1`.
+- Variáveis sensíveis aceitam `NOME_FILE` (lido de arquivo, convenção de Docker secrets/Kubernetes/gerenciadores de segredos): `backend/src/env-files.ts`. Definir `NOME` e `NOME_FILE` juntos é erro.
 - `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` só existem na API: `loadApiSecrets()` em `config.ts` os valida, e relay/worker não os recebem no Compose.
 - O Compose exige `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `WEBHOOK_SECRET` e `ADMIN_API_TOKEN` no `.env` (`${VAR:?}`); não há senha padrão embutida.
 - `.env` é local e ignorado pelo Git. Nunca leia, imprima, copie, altere ou inclua o conteúdo de `.env` em mensagens, commits, screenshots ou documentos. Use `.env.example` somente como referência de nomes e placeholders.

@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { resolve } from 'node:path';
 import { z } from 'zod';
+import { resolveFileBackedEnv } from './env-files.js';
 
 if (process.env.NODE_ENV !== 'test') dotenv.config({ path: resolve(process.cwd(), '../.env') });
 
@@ -23,7 +24,9 @@ const schema = z.object({
   OPENAI_RESERVED_INPUT_TOKENS: z.coerce.number().int().min(0).max(10_000).default(256),
 });
 
-export const config = schema.parse(process.env);
+const env = resolveFileBackedEnv(process.env);
+
+export const config = schema.parse(env);
 
 // Secrets only the HTTP API uses. Kept out of `config` so the relay and worker
 // start without them and the Compose file does not have to hand them over.
@@ -33,5 +36,5 @@ const apiSecretsSchema = z.object({
 });
 
 export function loadApiSecrets(): z.infer<typeof apiSecretsSchema> {
-  return apiSecretsSchema.parse(process.env);
+  return apiSecretsSchema.parse(env);
 }
