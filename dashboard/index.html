@@ -26,6 +26,7 @@
 <main>
   <header class="top"><div><div class="eyebrow">Integration control plane</div><h1 class="title">Operações</h1><p class="sub">Saúde dos eventos, entregas e consumo de IA.</p></div>
     <form class="auth" id="auth"><input id="token" type="password" autocomplete="off" placeholder="X-Admin-Token" aria-label="Token administrativo" aria-describedby="auth-help"><button>Conectar</button><button type="button" id="refresh">Atualizar</button><span class="sub" id="auth-help">A credencial fica apenas nesta aba.</span></form>
+    <p class="sub" id="session" aria-live="polite"></p>
   </header>
   <p class="error" id="error" role="alert" aria-live="polite"></p>
   <section class="grid" id="metrics" aria-label="Resumo" aria-live="polite"></section>
@@ -48,7 +49,7 @@
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, headers: { 'x-admin-token': adminToken, ...(options.headers || {}) } });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(response.status === 401 ? 'Token inválido ou não autorizado.' : data.error || `Falha HTTP ${response.status}`);
+    if (!response.ok) throw new Error(response.status === 401 ? 'Token inválido, expirado ou revogado.' : response.status === 403 ? 'Este token só tem permissão de leitura.' : data.error || `Falha HTTP ${response.status}`);
     return data;
   }
   function renderMetrics(summary, tokenSummary) {
@@ -67,18 +68,21 @@
       if (!fromDate || !toDate || fromDate > toDate) throw new Error('Selecione um período de datas válido.');
       const toExclusive = new Date(`${toDate}T00:00:00Z`); toExclusive.setUTCDate(toExclusive.getUTCDate() + 1);
       const tokenRange = `from=${encodeURIComponent(`${fromDate}T00:00:00.000Z`)}&to=${encodeURIComponent(toExclusive.toISOString())}`;
-      const [summary, events, dead, tokens, aiStatus] = await Promise.all([
+      const [session, summary, events, dead, tokens, aiStatus] = await Promise.all([
+        api('/v1/session'),
         api('/v1/operations/summary'), api(`/v1/operations/events?limit=25${status ? `&status=${encodeURIComponent(status)}` : ''}`),
         api('/v1/operations/dead-letters'), api(`/v1/usage/tokens?${tokenRange}`), api('/v1/ai/status'),
       ]);
+      const canAct = session.role === 'operator';
+      $('session').textContent = `Loja ${session.tenantId} · ${canAct ? 'operador' : 'somente leitura'}${session.expiresAt ? ` · token expira em ${new Date(session.expiresAt).toLocaleDateString('pt-BR')}` : ''}`;
       renderMetrics(summary, tokens.summary);
       $('events').innerHTML = events.events.length ? events.events.map((event) => `<tr><td>${esc(event.externalEventId)}</td><td>${esc(event.orderId)}</td><td><span class="pill ${esc(event.status)}">${esc(event.status)}</span></td><td>${event.attempts}</td><td>${date(event.updatedAt)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">Nenhum evento neste filtro.</td></tr>';
-      $('dead').innerHTML = dead.deadLetters.map((item) => `<tr><td>${esc(item.externalEventId)}</td><td>${item.attempts}</td><td>${esc(item.reason)}</td><td><button data-redrive="${esc(item.id)}">Reprocessar</button></td></tr>`).join('');
+      $('dead').innerHTML = dead.deadLetters.map((item) => `<tr><td>${esc(item.externalEventId)}</td><td>${item.attempts}</td><td>${esc(item.reason)}</td><td><button data-redrive="${esc(item.id)}" ${canAct ? '' : 'disabled title="Requer token de operador"'}>Reprocessar</button></td></tr>`).join('');
       $('dead-empty').hidden = dead.deadLetters.length > 0;
       $('tokens').innerHTML = tokens.usage.map((item) => `<tr><td>${esc(item.provider)} / ${esc(item.model)} / ${esc(item.task)}</td><td>${Number(item.requests).toLocaleString('pt-BR')}</td><td>${Number(item.input_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.cached_input_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.output_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.reasoning_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.total_tokens).toLocaleString('pt-BR')}</td></tr>`).join('');
       $('tokens-empty').hidden = tokens.usage.length > 0;
       const tokenBudgetAvailable = Number(aiStatus.remainingTokensToday) >= Number(aiStatus.reservedInputTokens) + 16;
-      $('run-ai').disabled = !aiStatus.enabled || !tokenBudgetAvailable || aiStatus.unresolvedRequests > 0;
+      $('run-ai').disabled = !canAct || !aiStatus.enabled || !tokenBudgetAvailable || aiStatus.unresolvedRequests > 0;
       $('run-ai').textContent = !aiStatus.enabled ? 'Exemplo IA indisponível' : tokenBudgetAvailable ? `Rodar ${aiStatus.model} (consome tokens)` : 'Teto diário de tokens atingido';
       $('ai-status').textContent = aiStatus.enabled
         ? `${Number(aiStatus.usedTokensToday).toLocaleString('pt-BR')} tokens usados hoje (UTC) • teto ${Number(aiStatus.dailyTokenLimit).toLocaleString('pt-BR')}`

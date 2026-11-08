@@ -21,8 +21,9 @@ const hostile = {
 type Reply = { status?: number; body: unknown };
 type ApiRoutes = Record<string, Reply>;
 
-function defaultRoutes(): ApiRoutes {
+function defaultRoutes(role = 'operator'): ApiRoutes {
   return {
+    '/v1/session': { body: { tenantId: 'loja-a', role, expiresAt: '2027-02-06T12:00:00Z' } },
     '/v1/operations/summary': { body: { statuses: [{ status: 'delivered', count: 1 }] } },
     '/v1/operations/events': { body: { events: [{ externalEventId: hostile.img, orderId: hostile.svg, status: 'delivered', attempts: 0, updatedAt: '2026-11-08T12:00:00Z' }] } },
     '/v1/operations/dead-letters': { body: { deadLetters: [{ id: 'dl-1', externalEventId: 'evt-9', attempts: 5, reason: hostile.bold }] } },
@@ -104,8 +105,27 @@ describe('portfolio dashboard', () => {
     startPage();
     await connect('wrong-token');
 
-    expect($('error').textContent).toBe('Token inválido ou não autorizado.');
+    expect($('error').textContent).toBe('Token inválido, expirado ou revogado.');
     expect($('events').textContent).toBe('');
+  });
+
+  it('shows the session and disables actions for a read-only token', async () => {
+    mockApi(defaultRoutes('viewer'));
+    startPage();
+    await connect('viewer-token');
+    expect($('session').textContent).toContain('somente leitura');
+    expect($('session').textContent).toContain('loja-a');
+    const redrive = $('dead').querySelector('button[data-redrive]') as HTMLButtonElement;
+    expect(redrive.disabled).toBe(true);
+    expect(($('run-ai') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps actions available to an operator token', async () => {
+    mockApi(defaultRoutes('operator'));
+    startPage();
+    await connect('operator-token');
+    expect($('session').textContent).toContain('operador');
+    expect(($('dead').querySelector('button[data-redrive]') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('states token-only accounting and explains overlapping token categories', () => {

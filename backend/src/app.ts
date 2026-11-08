@@ -15,7 +15,8 @@ import { isParsedJson, type ParsedJson } from './json-body.js';
 import { isTransientDatabaseError } from './database.js';
 import {
   activeWebhookSecrets, createAdminToken, createTenant, createWebhookKey,
-  resolveAdminToken, revokeAdminToken, revokeWebhookKey, TENANT_ID_PATTERN, TenantNotFoundError,
+  listAdminTokens, resolveAdminToken, revokeAdminToken, revokeWebhookKey, TENANT_ID_PATTERN, TenantNotFoundError,
+  type AdminRole, type AdminSession,
 } from './tenants.js';
 
 export type AppDependencies = {
@@ -48,13 +49,21 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   }
 
   /**
-   * Tenant that owns the X-Admin-Token, or null after replying 401. Every
-   * operations query is filtered by this id, so a token only sees its own store.
+   * Session of the X-Admin-Token, or null after replying 401 (unknown, revoked or
+   * expired) or 403 (role too low). Every operations query is filtered by the
+   * session's tenant, so a token only sees its own store.
    */
-  async function requireTenantAdmin(request: FastifyRequest, reply: Reply): Promise<string | null> {
-    const tenantId = await resolveAdminToken(pool, header(request, 'x-admin-token'));
-    if (!tenantId) reply.code(401).send({ error: 'unauthorized' });
-    return tenantId;
+  async function requireTenantAdmin(request: FastifyRequest, reply: Reply, required: AdminRole): Promise<AdminSession | null> {
+    const session = await resolveAdminToken(pool, header(request, 'x-admin-token'));
+    if (!session) {
+      reply.code(401).send({ error: 'unauthorized' });
+      return null;
+    }
+    if (required === 'operator' && session.role !== 'operator') {
+      reply.code(403).send({ error: 'forbidden', requiredRole: 'operator' });
+      return null;
+    }
+    return session;
   }
 
   /** Platform operator (manages stores and their credentials); sees no store data. */
@@ -122,9 +131,16 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
       .send(dashboardHtml.replace('<script>', `<script nonce="${nonce}">`).replace('<style>', `<style nonce="${nonce}">`));
   });
 
+  app.get('/v1/session', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    return session;
+  });
+
   app.get('/v1/operations/summary', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
     const result = await pool.query(
       `SELECT e.status, count(*)::int AS count,
               coalesce(avg(extract(epoch FROM (e.updated_at - e.received_at))) FILTER (WHERE e.status = 'delivered'), 0)::float AS avg_delivery_seconds
@@ -155,8 +171,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.get('/v1/ai/status', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
     const usage = await pool.query<{ used_tokens: string }>(
       `SELECT coalesce(sum(total_tokens), 0)::text AS used_tokens FROM ai_token_usage
         WHERE tenant_id=$1 AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`,
@@ -174,15 +191,17 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.get('/v1/ai/unresolved', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
     const pending = await pool.query("SELECT id, provider_request_id AS \"providerRequestId\", created_at AS \"createdAt\" FROM ai_request_journal WHERE tenant_id=$1 AND status='pending' ORDER BY created_at", [tenantId]);
     return { requests: pending.rows };
   });
 
   app.post<{ Params: { id: string }; Body: ParsedJson }>('/v1/ai/unresolved/:id/reconcile', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'operator');
+    if (!session) return;
+    const { tenantId } = session;
     const id = z.string().uuid().safeParse(request.params.id);
     const data = z.object({
       providerRequestId: z.string().min(1).max(300), model: z.string().min(1).max(200),
@@ -204,8 +223,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   });
 
   app.post('/v1/ai/demo', { config: { rateLimit: { max: 3, timeWindow: '1 hour' } } }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'operator');
+    if (!session) return;
+    const { tenantId } = session;
     if (!isOpenAiConfigured()) return reply.code(503).send({ error: 'ai_provider_not_configured' });
     try {
       const result = await runTokenMeterDemo(pool, tenantId);
@@ -226,8 +246,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { status?: string; limit?: string; cursor?: string } }>('/v1/operations/events', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
     const query = z.object({
       status: z.enum(['received', 'queued', 'processing', 'delivered', 'failed']).optional(),
       limit: z.coerce.number().int().min(1).max(100).default(25),
@@ -252,8 +273,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { limit?: string } }>('/v1/operations/dead-letters', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
     const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
     const result = await pool.query(
@@ -269,8 +291,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.post<{ Params: { id: string } }>('/v1/operations/dead-letters/:id/redrive', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'operator');
+    if (!session) return;
+    const { tenantId } = session;
     const id = z.string().uuid().safeParse(request.params.id);
     if (!id.success) return reply.code(400).send({ error: 'invalid_id' });
     const client = await pool.connect();
@@ -367,8 +390,9 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.get<{ Querystring: { from?: string; to?: string } }>('/v1/usage/tokens', {
     config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
   }, async (request, reply) => {
-    const tenantId = await requireTenantAdmin(request, reply);
-    if (!tenantId) return;
+    const session = await requireTenantAdmin(request, reply, 'viewer');
+    if (!session) return;
+    const { tenantId } = session;
 
     const dates = request.query;
     const dateSchema = z.object({
@@ -468,16 +492,27 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   app.post<{ Params: { tenantId: string }; Body: ParsedJson }>('/v1/platform/tenants/:tenantId/admin-tokens', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {
     if (!requirePlatformAdmin(request, reply)) return;
     const params = tenantParams.safeParse(request.params);
-    const data = z.object({ label: z.string().trim().max(100).default('') }).strict().safeParse(request.body?.value ?? {});
+    const data = z.object({
+      label: z.string().trim().max(100).default(''),
+      role: z.enum(['viewer', 'operator']).default('operator'),
+      expiresInDays: z.number().int().min(1).max(365).default(90),
+    }).strict().safeParse(request.body?.value ?? {});
     if (!params.success || !data.success) return reply.code(400).send({ error: 'invalid_request' });
     try {
-      const token = await createAdminToken(pool, params.data.tenantId, data.data.label);
+      const token = await createAdminToken(pool, params.data.tenantId, data.data.label, data.data.role, data.data.expiresInDays);
       reply.header('cache-control', 'no-store');
       return reply.code(201).send(token);
     } catch (error) {
       if (error instanceof TenantNotFoundError) return reply.code(404).send({ error: 'tenant_not_found' });
       throw error;
     }
+  });
+
+  app.get<{ Params: { tenantId: string } }>('/v1/platform/tenants/:tenantId/admin-tokens', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!requirePlatformAdmin(request, reply)) return;
+    const params = tenantParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: 'invalid_request' });
+    return { tokens: await listAdminTokens(pool, params.data.tenantId) };
   });
 
   app.delete<{ Params: { tenantId: string; tokenId: string } }>('/v1/platform/tenants/:tenantId/admin-tokens/:tokenId', { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } }, async (request, reply) => {

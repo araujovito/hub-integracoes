@@ -198,4 +198,42 @@ suite('HTTP API with multiple stores', () => {
       await unreachable.end();
     }
   });
+
+  it('lets a viewer token read but not act, and reports the session', async () => {
+    const created = await app.inject({ method: 'POST', url: `/v1/platform/tenants/${storeA.id}/admin-tokens`, headers: platform, payload: { label: 'auditoria', role: 'viewer', expiresInDays: 7 } });
+    expect(created.statusCode).toBe(201);
+    const viewer = created.json() as { token: string; role: string; expiresAt: string };
+    expect(viewer.role).toBe('viewer');
+    const headers = { 'x-admin-token': viewer.token };
+
+    const session = await app.inject({ method: 'GET', url: '/v1/session', headers });
+    expect(session.json()).toMatchObject({ tenantId: storeA.id, role: 'viewer' });
+    expect((await app.inject({ method: 'GET', url: '/v1/operations/events', headers })).statusCode).toBe(200);
+    for (const action of [
+      { method: 'POST' as const, url: `/v1/operations/dead-letters/${randomUUID()}/redrive` },
+      { method: 'POST' as const, url: '/v1/ai/demo' },
+      { method: 'POST' as const, url: `/v1/ai/unresolved/${randomUUID()}/reconcile`, payload: {} },
+    ]) {
+      const response = await app.inject({ ...action, headers });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({ error: 'forbidden', requiredRole: 'operator' });
+    }
+  });
+
+  it('lists token metadata for the platform without exposing tokens or digests', async () => {
+    const list = await app.inject({ method: 'GET', url: `/v1/platform/tenants/${storeA.id}/admin-tokens`, headers: platform });
+    expect(list.statusCode).toBe(200);
+    const tokens = list.json().tokens as Record<string, unknown>[];
+    expect(tokens.length).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(tokens[0]!).sort()).toEqual(['active', 'createdAt', 'expiresAt', 'id', 'label', 'revokedAt', 'role']);
+    expect(list.body).not.toContain('hub_adm_');
+    expect((await app.inject({ method: 'GET', url: `/v1/platform/tenants/${storeA.id}/admin-tokens`, headers: { 'x-admin-token': storeA.adminToken } })).statusCode).toBe(401);
+  });
+
+  it('rejects invalid token lifetimes and roles', async () => {
+    for (const payload of [{ expiresInDays: 0 }, { expiresInDays: 400 }, { role: 'admin' }]) {
+      const response = await app.inject({ method: 'POST', url: `/v1/platform/tenants/${storeA.id}/admin-tokens`, headers: platform, payload });
+      expect(response.statusCode).toBe(400);
+    }
+  });
 });

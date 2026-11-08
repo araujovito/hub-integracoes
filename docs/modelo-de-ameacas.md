@@ -29,7 +29,7 @@ Em `compose.prod.yaml`, PostgreSQL, Redis e API ficam só na rede interna do Com
 | Perda entre persistência e fila | outbox transacional | PostgreSQL/Redis sem transação comum; possível publicação duplicada, tratada no consumidor |
 | Crash do worker | PEL do consumer group e recuperação via XAUTOCLAIM | Retenção/trim/alertas de stream ainda requer política operacional |
 | Retry infinito | máximo configurável e dead-letter | Redrive exige operador autenticado e entra pela outbox transacional; adicionar trilha de auditoria mais completa |
-| Acesso indevido a operações | token admin por loja (SHA-256 no banco), revogável; token de plataforma separado; rate limit | Tokens sem expiração automática e sem papéis dentro da loja |
+| Acesso indevido a operações | token admin por loja (SHA-256 no banco), revogável; token de plataforma separado; rate limit | Tokens de loja com papel (`viewer`/`operator`) e validade; token de plataforma estático, com troca manual |
 | Exposição em logs | logs estruturados sem corpo; headers de autenticação mascarados | Revisar logging/telemetria ao incluir novos campos e fornecedores |
 | Vazamento de prompt/resposta | ledger guarda metadados e tokens, nunca conteúdo | Demo de provider usa prompt fixo; definir retenção e avaliar privacidade antes de prompts de usuário |
 | Segredo comprometido | produção com Docker secrets (`*_FILE`), nada no ambiente; chaves de webhook cifradas no banco; gitleaks com histórico completo no CI e push protection do GitHub | Troca da `TENANT_SECRETS_KEY` sem parada (`rotate-master-key`); a troca é manual |

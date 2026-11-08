@@ -82,16 +82,36 @@ export async function activeWebhookSecrets(pool: Pool, keys: MasterKeys, tenantI
   return secrets;
 }
 
-/** Issue an admin token scoped to one tenant. Returned once; only its digest is stored. */
-export async function createAdminToken(pool: Pool, tenantId: string, label: string) {
+export type AdminRole = 'viewer' | 'operator';
+export type AdminSession = { tenantId: string; role: AdminRole; expiresAt: Date | null };
+
+/**
+ * Issue an admin token scoped to one tenant. `viewer` reads; `operator` can also
+ * act (redrive, AI demo, reconciliation). Always expires. Returned once; only
+ * its digest is stored.
+ */
+export async function createAdminToken(pool: Pool, tenantId: string, label: string, role: AdminRole = 'operator', expiresInDays = 90) {
+  if (!Number.isInteger(expiresInDays) || expiresInDays < 1 || expiresInDays > 365) throw new Error('invalid_expiry');
   const token = `${ADMIN_TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
-  const result = await pool.query<{ id: string }>(
-    `INSERT INTO tenant_admin_tokens (tenant_id, token_sha256, label)
-     SELECT id, $2, $3 FROM tenants WHERE id=$1 AND disabled_at IS NULL RETURNING id`,
-    [tenantId, digest(token), label],
+  const result = await pool.query<{ id: string; expires_at: Date }>(
+    `INSERT INTO tenant_admin_tokens (tenant_id, token_sha256, label, role, expires_at)
+     SELECT id, $2, $3, $4, now() + make_interval(days => $5) FROM tenants WHERE id=$1 AND disabled_at IS NULL
+     RETURNING id, expires_at`,
+    [tenantId, digest(token), label, role, expiresInDays],
   );
   if (!result.rows[0]) throw new TenantNotFoundError();
-  return { tokenId: result.rows[0].id, token };
+  return { tokenId: result.rows[0].id, token, role, expiresAt: result.rows[0].expires_at };
+}
+
+/** Token metadata for the platform operator (never the token or its digest). */
+export async function listAdminTokens(pool: Pool, tenantId: string) {
+  const result = await pool.query(
+    `SELECT id, label, role, created_at AS "createdAt", expires_at AS "expiresAt", revoked_at AS "revokedAt",
+            (revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())) AS active
+       FROM tenant_admin_tokens WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 200`,
+    [tenantId],
+  );
+  return result.rows;
 }
 
 export async function revokeAdminToken(pool: Pool, tenantId: string, tokenId: string): Promise<boolean> {
@@ -101,15 +121,17 @@ export async function revokeAdminToken(pool: Pool, tenantId: string, tokenId: st
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Tenant that owns a valid admin token, or null. */
-export async function resolveAdminToken(pool: Pool, token: string | undefined): Promise<string | null> {
+/** Session for a valid (not revoked, not expired, tenant enabled) admin token, or null. */
+export async function resolveAdminToken(pool: Pool, token: string | undefined): Promise<AdminSession | null> {
   if (!token || !token.startsWith(ADMIN_TOKEN_PREFIX) || token.length > 200) return null;
-  const result = await pool.query<{ tenant_id: string }>(
-    `SELECT a.tenant_id FROM tenant_admin_tokens a JOIN tenants t ON t.id = a.tenant_id
-      WHERE a.token_sha256=$1 AND a.revoked_at IS NULL AND t.disabled_at IS NULL`,
+  const result = await pool.query<{ tenant_id: string; role: AdminRole; expires_at: Date | null }>(
+    `SELECT a.tenant_id, a.role, a.expires_at FROM tenant_admin_tokens a JOIN tenants t ON t.id = a.tenant_id
+      WHERE a.token_sha256=$1 AND a.revoked_at IS NULL AND t.disabled_at IS NULL
+        AND (a.expires_at IS NULL OR a.expires_at > now())`,
     [digest(token)],
   );
-  return result.rows[0]?.tenant_id ?? null;
+  const row = result.rows[0];
+  return row ? { tenantId: row.tenant_id, role: row.role, expiresAt: row.expires_at } : null;
 }
 
 export type ReencryptionResult = { reencrypted: number; alreadyCurrent: number; unreadable: string[] };

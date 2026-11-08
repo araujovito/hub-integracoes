@@ -35,7 +35,7 @@ Cada loja (tenant) tem chaves de webhook e tokens administrativos próprios. O o
 H='X-Platform-Token: <PLATFORM_ADMIN_TOKEN>'
 curl -X POST localhost:3000/v1/platform/tenants -H "$H" -H 'content-type: application/json' -d '{"id":"loja-a","name":"Loja A"}'
 curl -X POST localhost:3000/v1/platform/tenants/loja-a/webhook-keys -H "$H" -H 'content-type: application/json' -d '{}'
-curl -X POST localhost:3000/v1/platform/tenants/loja-a/admin-tokens -H "$H" -H 'content-type: application/json' -d '{"label":"operador"}'
+curl -X POST localhost:3000/v1/platform/tenants/loja-a/admin-tokens -H "$H" -H 'content-type: application/json' -d '{"label":"operador","role":"operator","expiresInDays":90}'
 ```
 
 A loja envia pedidos para `POST /v1/webhooks/orders` com três headers:
@@ -51,7 +51,7 @@ TS=$(date +%s); SIG=$(printf '%s' "$TS.$BODY" | openssl dgst -sha256 -hmac "$SEC
 **Proteção contra replay:** pedidos com horário a mais de `WEBHOOK_TOLERANCE_SECONDS` (padrão 300) do relógio do servidor são recusados com `timestamp_out_of_tolerance`, mesmo com assinatura válida. Como o horário faz parte da assinatura, não dá para atualizá-lo numa requisição capturada. Dentro da janela, um reenvio idêntico cai na deduplicação por `eventId` e não gera efeito. O relógio do remetente precisa estar sincronizado (NTP). Loja inexistente, loja desativada e assinatura errada recebem a mesma resposta (401), para o endpoint não revelar quais lojas existem.
 
 - **Troca de chave sem parada:** criar uma chave nova dá às anteriores uma carência (`graceHours`, padrão 24). Durante a carência, as duas são aceitas; `graceHours: 0` encerra as antigas na hora. `DELETE .../webhook-keys/<keyId>` revoga imediatamente.
-- **Token administrativo por loja:** o dashboard e as rotas de operações usam `X-Admin-Token` da loja e só enxergam os dados dela. `DELETE .../admin-tokens/<tokenId>` revoga.
+- **Token administrativo por loja:** o dashboard e as rotas de operações usam o `X-Admin-Token` da loja e só enxergam os dados dela. Cada token tem um papel: `viewer` só lê; `operator` também reprocessa dead letters e usa o exemplo e a reconciliação de IA (um `viewer` recebe 403 nessas ações). Também tem validade: `expiresInDays`, de 1 a 365, padrão 90. `GET /v1/session` informa loja, papel e validade do token em uso. `GET .../admin-tokens` lista os tokens da loja, sem o token nem o digest, e `DELETE .../admin-tokens/<tokenId>` revoga. Tokens emitidos antes da migration `011` não expiram até serem revogados.
 - **Armazenamento:** segredos de webhook ficam cifrados com AES-256-GCM sob `TENANT_SECRETS_KEY`; tokens administrativos, só como SHA-256. Perder `TENANT_SECRETS_KEY` torna as chaves de webhook ilegíveis: as lojas precisam de chaves novas.
 
 ## Fluxo

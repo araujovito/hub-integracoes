@@ -50,8 +50,8 @@ suite('tenant store', () => {
     const b = await createAdminToken(db.pool, 'loja-b', 'operador');
     const stored = await db.pool.query('SELECT count(*)::int AS count FROM tenant_admin_tokens WHERE token_sha256::text LIKE $1', [`%${a.token}%`]);
     expect(stored.rows[0].count).toBe(0);
-    expect(await resolveAdminToken(db.pool, a.token)).toBe('loja-a');
-    expect(await resolveAdminToken(db.pool, b.token)).toBe('loja-b');
+    expect(await resolveAdminToken(db.pool, a.token)).toMatchObject({ tenantId: 'loja-a', role: 'operator' });
+    expect(await resolveAdminToken(db.pool, b.token)).toMatchObject({ tenantId: 'loja-b' });
     expect(await resolveAdminToken(db.pool, `${a.token}x`)).toBeNull();
     expect(await resolveAdminToken(db.pool, undefined)).toBeNull();
 
@@ -100,5 +100,26 @@ suite('tenant store', () => {
     expect(wrong.reencrypted).toBe(0);
     expect(wrong.unreadable.length).toBeGreaterThanOrEqual(3);
     expect(new Set(await activeWebhookSecrets(db.pool, finalRing, 'loja-rot'))).toEqual(new Set([kept.secret, created.secret]));
+  });
+
+  it('issues expiring tokens with a role and stops accepting them after expiry', async () => {
+    await createTenant(db.pool, 'loja-exp', 'Expira');
+    const viewer = await createAdminToken(db.pool, 'loja-exp', 'leitura', 'viewer', 30);
+    const session = await resolveAdminToken(db.pool, viewer.token);
+    expect(session).toMatchObject({ tenantId: 'loja-exp', role: 'viewer' });
+    const days = (session!.expiresAt!.getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(29.9);
+    expect(days).toBeLessThanOrEqual(30);
+
+    await db.pool.query("UPDATE tenant_admin_tokens SET expires_at = now() - interval '1 second' WHERE id=$1", [viewer.tokenId]);
+    expect(await resolveAdminToken(db.pool, viewer.token)).toBeNull();
+    await expect(createAdminToken(db.pool, 'loja-exp', 'x', 'operator', 0)).rejects.toThrow('invalid_expiry');
+    await expect(createAdminToken(db.pool, 'loja-exp', 'x', 'operator', 366)).rejects.toThrow('invalid_expiry');
+  });
+
+  it('keeps tokens issued before expiry existed (NULL expiry) working', async () => {
+    const legacy = await createAdminToken(db.pool, 'loja-exp', 'legado');
+    await db.pool.query('UPDATE tenant_admin_tokens SET expires_at = NULL WHERE id=$1', [legacy.tokenId]);
+    expect(await resolveAdminToken(db.pool, legacy.token)).toMatchObject({ tenantId: 'loja-exp', role: 'operator', expiresAt: null });
   });
 });
