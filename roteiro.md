@@ -30,7 +30,6 @@ Lista do que separa este código de uma operação real. Nada disso está implem
 1. **Deploy.** Nunca rodou num servidor público. `compose.prod.yaml` foi testado só localmente, com o certificado interno do Caddy.
 2. **Alta disponibilidade.** É um host só: PostgreSQL e Redis sem réplica nem failover. Para escalar, a API é stateless e o worker escala pelo consumer group, mas banco e Redis precisam de serviço gerenciado ou de replicação.
 3. **Monitoramento e alertas.** Há logs JSON e as rotas `/v1/platform/queue` e `/v1/operations/summary`, mas não há exportação de métricas (Prometheus/OpenTelemetry) nem alerta de backlog, dead letter ou certificado.
-4. **Timeouts de SQL por consulta** (`statement_timeout`): uma consulta travada hoje segura uma conexão do pool sem limite.
 5. **Rotação da chave mestra** `TENANT_SECRETS_KEY`. O formato cifrado tem byte de versão para isso, mas não existe procedimento de re-cifragem.
 6. **Ciclo de vida de credenciais.** Tokens de plataforma e de loja não expiram sozinhos, e não há papéis dentro de uma loja (só leitura × operador).
 7. **Backup agendado e fora do servidor.** Os scripts existem; agendar (cron/systemd), cifrar e copiar para outro lugar é configuração de quem opera.

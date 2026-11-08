@@ -15,6 +15,11 @@ const schema = z.object({
   // trusted (0 = none). Set to 1 only when the API is reachable solely through
   // the proxy, otherwise clients could spoof their IP and dodge rate limits.
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+  // Server-side limits applied to every pooled connection: PostgreSQL cancels a
+  // statement after DB_STATEMENT_TIMEOUT_MS and ends a session left idle inside
+  // an open transaction (holding locks) after DB_IDLE_IN_TRANSACTION_TIMEOUT_MS.
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(100).max(600_000).default(10_000),
+  DB_IDLE_IN_TRANSACTION_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(3_600_000).default(30_000),
   // Per client IP (load tests raise it; one machine sends everything).
   WEBHOOK_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(120),
   // Max distance between a webhook's signed timestamp and the server clock.

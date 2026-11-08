@@ -1,4 +1,5 @@
 import { Pool, type PoolConfig } from 'pg';
+import { config } from './config.js';
 import { runMigrations } from './migrations.js';
 
 /**
@@ -8,9 +9,24 @@ import { runMigrations } from './migrations.js';
  * broken client, so logging is all that is needed.
  */
 export function createPool(service: string, options: PoolConfig): Pool {
-  const pool = new Pool({ connectionTimeoutMillis: 5_000, ...options });
+  const pool = new Pool({
+    connectionTimeoutMillis: 5_000,
+    statement_timeout: config.DB_STATEMENT_TIMEOUT_MS,
+    idle_in_transaction_session_timeout: config.DB_IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    ...options,
+  });
   pool.on('error', (error) => {
     console.error(JSON.stringify({ service, status: 'idle_db_client_error', error: error.message }));
+  });
+  // A client that is checked out but has no query running (e.g. the relay
+  // waiting on Redis mid-transaction) emits 'error' on itself when the server
+  // ends the session, for instance after idle_in_transaction_session_timeout.
+  // The pool listener above does not cover it. The next query on that client
+  // fails normally and the pool discards it on release.
+  pool.on('connect', (client) => {
+    client.on('error', (error) => {
+      console.error(JSON.stringify({ service, status: 'checked_out_db_client_error', error: error.message }));
+    });
   });
   return pool;
 }
@@ -39,6 +55,7 @@ export async function migrateWhenReady(pool: Pool, service: string, shouldStop: 
 const TRANSIENT_CODES = new Set([
   'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EPIPE',
   '57P01', '57P02', '57P03', // admin_shutdown, crash_shutdown, cannot_connect_now
+  '57014', // query_canceled: statement_timeout hit, the database is overloaded or blocked
   '08000', '08001', '08003', '08004', '08006', // connection exceptions
 ]);
 

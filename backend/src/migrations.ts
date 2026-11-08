@@ -8,6 +8,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
   const files = (await readdir(directory)).filter((file) => /^\d+_[a-z0-9_-]+\.sql$/i.test(file)).sort();
   const client = await pool.connect();
   try {
+    // Migrations may legitimately run long (index builds, backfills) and the lock
+    // waits for another instance; the pool's statement_timeout does not apply here.
+    await client.query('SET statement_timeout = 0');
     await client.query("SELECT pg_advisory_lock(hashtextextended('hub-integracoes:migrations', 0))");
     await client.query('CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())');
     for (const file of files) {
@@ -29,7 +32,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
       }
     }
   } finally {
-    const unlocked = await client.query("SELECT pg_advisory_unlock(hashtextextended('hub-integracoes:migrations', 0))").then(() => true, () => false);
+    const unlocked = await client.query("SELECT pg_advisory_unlock(hashtextextended('hub-integracoes:migrations', 0))")
+      .then(() => client.query('RESET statement_timeout'))
+      .then(() => true, () => false);
     client.release(!unlocked);
   }
 }
