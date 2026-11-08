@@ -97,3 +97,20 @@ jobs:
       - run: corepack enable && yarn install --frozen-lockfile
         working-directory: backend
       - run: scripts/e2e-resilience.sh 60 15
+
+  # Dashboard in Chromium, Firefox and WebKit (desktop + mobile): axe WCAG 2.1 AA,
+  # console/CSP errors, horizontal scroll, keyboard login, focus ring, viewer role.
+  dashboard-review:
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: backend/yarn.lock
+      - run: corepack enable && yarn install --frozen-lockfile && npx playwright install --with-deps chromium firefox webkit
+        working-directory: backend
+      - run: scripts/dashboard-review.sh

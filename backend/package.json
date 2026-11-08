@@ -35,11 +35,13 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.19.2",
     "@types/pg": "^8.15.5",
     "eslint": "^10.14.0",
     "happy-dom": "^21.0.4",
+    "playwright": "^1.65.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1",
