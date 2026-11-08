@@ -54,7 +54,7 @@ suite('local integration services', () => {
     const result = await pool!.query("SELECT to_regclass('erp_deliveries') AS table_name");
     expect(result.rows[0]?.table_name).toBe('erp_deliveries');
     const migrations = await pool!.query('SELECT count(*)::int AS count FROM schema_migrations');
-    expect(migrations.rows[0]?.count).toBe(9);
+    expect(migrations.rows[0]?.count).toBe(10);
     // Tenant-scoped tables reference tenants (migration 009); later tests write to this tenant.
     await pool!.query('INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING', [TENANT]);
   });

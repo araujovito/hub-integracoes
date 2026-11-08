@@ -18,6 +18,11 @@ const schema = z.object({
   WORKER_CONSUMER: z.string().min(1).default('worker-local'),
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
   WORKER_CLAIM_IDLE_MS: z.coerce.number().int().min(1000).max(600000).default(30000),
+  // Retention (maintenance service). Stream entries are trimmed only after being
+  // acknowledged; payloads of delivered events are cleared after DATA_RETENTION_DAYS.
+  STREAM_RETENTION_HOURS: z.coerce.number().int().min(1).max(24 * 365).default(72),
+  DATA_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  MAINTENANCE_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3600),
   DASHBOARD_ENABLED: z.enum(['true', 'false']).default('true'),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().min(1).max(120).default('gpt-6-luna'),

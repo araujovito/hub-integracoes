@@ -112,6 +112,27 @@ services:
       timeout: 6s
       retries: 5
 
+  maintenance:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["node", "dist/maintenance-runner.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}@redis:6379
+      REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
+      REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
+      STREAM_RETENTION_HOURS: ${STREAM_RETENTION_HOURS:-72}
+      DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+      MAINTENANCE_INTERVAL_SECONDS: ${MAINTENANCE_INTERVAL_SECONDS:-3600}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

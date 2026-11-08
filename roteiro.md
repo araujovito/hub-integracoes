@@ -43,7 +43,7 @@ Redis Streams com consumer groups permite distribuir mensagens e mantê-las pend
 1. Expor contagens de recebidos, fila, entregues, falhos, pendentes e dead-letter sem incluir payload/segredos (feito no MVP).
 2. Logs estruturados com `eventId`, correlação e resultado já mascaram os headers de autenticação; revisar logging ao adicionar integrações externas.
 3. Relay e worker agora mantêm o processo vivo em falhas transitórias e tentam novamente com backoff exponencial limitado e jitter. Ainda faltam timeouts SQL explícitos e política de concorrência/carga sustentada.
-4. Configurar retenção/trim de streams e política de retenção/auditoria PostgreSQL; monitorar backlog e idade do evento mais antigo.
+4. Retenção implementada (serviço `maintenance`): trim do stream só de entradas confirmadas e lidas, e remoção de payloads entregues após `DATA_RETENTION_DAYS`. Falta alerta automático de backlog; a idade do evento mais antigo já sai em `/v1/platform/queue`.
 5. Health/readiness distintos: `/health` informa liveness; `/ready` verifica dependências (implementado).
 
 ### 3. Segurança e isolamento

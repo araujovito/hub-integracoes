@@ -66,6 +66,14 @@ Webhook assinado → validação → PostgreSQL (evento + outbox na mesma transa
 
 A API recebe webhook assinado e grava evento + outbox na mesma transação. Um relay independente reivindica a outbox com `FOR UPDATE SKIP LOCKED` e publica no Redis Streams. Um worker em consumer group recupera mensagens pendentes via `XAUTOCLAIM`, aplica o efeito numa tabela ERP simulada com chave única e confirma com `XACK` depois do commit. Falhas são contabilizadas e, ao atingir o limite, vão para `dead_letter_events`.
 
+## Retenção
+
+O serviço `maintenance` roda a cada `MAINTENANCE_INTERVAL_SECONDS` (padrão 1 h), com advisory lock para réplicas não se sobreporem:
+
+- **Redis Streams:** remove entradas mais antigas que `STREAM_RETENTION_HOURS` (padrão 72), mas nunca uma mensagem pendente (lida e sem `XACK`) nem uma que o consumer group ainda não leu. Sem o consumer group, não remove nada.
+- **PostgreSQL:** depois de `DATA_RETENTION_DAYS` (padrão 90), o payload de pedidos entregues e das entregas no ERP simulado vira `{}` e a data fica em `payload_redacted_at`. A linha do evento continua, então um `eventId` antigo segue sendo reconhecido como duplicado. Linhas publicadas da outbox mais antigas que o prazo são apagadas. Pedidos em dead letter mantêm o payload, para poderem ser reprocessados.
+- Tudo é feito em lotes curtos, sem transação longa nem lock de tabela.
+
 ## Contagem de tokens
 
 `ai_token_usage` guarda, por execução, tarefa, provedor, modelo, tokens de entrada, saída, total, cache e raciocínio, além do request ID. `recordTokenUsage()` aceita somente números reportados pelo provider; não estima tokens por caracteres nem converte o uso em moeda. Cache é subconjunto da entrada e raciocínio é subconjunto da saída; não devem ser somados ao total outra vez. O endpoint `GET /v1/usage/tokens` agrega o uso da loja e exige o `X-Admin-Token` dela.
@@ -93,7 +101,7 @@ curl -H "X-Admin-Token: $STORE_ADMIN_TOKEN" \
 - O banco usa chaves únicas para impedir duplicação e uma outbox para não separar a persistência do evento da intenção de publicá-lo.
 - Cada token administrativo é de uma loja e todas as consultas de operações filtram por ela; testes de integração cobrem o acesso cruzado (eventos, cursor, dead letters, redrive).
 - A API é stateless e pode escalar horizontalmente; os workers poderão escalar pela fila. A entrega deve ser tratada como *at-least-once*, com idempotência também no consumidor.
-- Ainda não é produção: faltam TLS, política de retenção e restauração de backups testada (ver `roteiro.md`).
+- Ainda não é produção: faltam TLS e restauração de backups testada (ver `roteiro.md`).
 
 ## Operações
 
