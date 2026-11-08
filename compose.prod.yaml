@@ -73,7 +73,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
+    image: redis:8.0-alpine@sha256:5f61955be8ab2ccee9372b84ae4d4da2e2b156f87281e3f218544055e7ee04d4
     # The password lives in a config file, not on the command line (visible in ps).
     command: ["redis-server", "/run/secrets/redis_conf"]
     secrets: [redis_conf, redis_password]
