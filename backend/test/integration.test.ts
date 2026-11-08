@@ -137,6 +137,8 @@ suite('local integration services', () => {
       expect(journal.rows).toEqual([{ status: 'pending', count: 1 }, { status: 'recorded', count: 1 }]);
       const pending = await pool!.query("SELECT id FROM ai_request_journal WHERE status='pending'");
       const reconciledUsage = { tenantId: TENANT, task: 'portfolio-token-meter-demo', provider: 'openai', model: 'test-model', providerRequestId: 'test-reconciled', inputTokens: 12, outputTokens: 3, totalTokens: 15 };
+      await expect(reconcileAiUsage(pool!, pending.rows[0].id, TENANT, reconciledUsage, 'verified test usage')).rejects.toThrow('provider_request_id_mismatch');
+      reconciledUsage.providerRequestId = 'test-unknown';
       await reconcileAiUsage(pool!, pending.rows[0].id, TENANT, reconciledUsage, 'verified test usage');
       await expect(reconcileAiUsage(pool!, pending.rows[0].id, TENANT, reconciledUsage, 'verified test usage')).rejects.toThrow('pending_request_not_found');
       expect((await pool!.query("SELECT count(*)::int AS count FROM ai_request_journal WHERE status='pending'")).rows[0].count).toBe(0);

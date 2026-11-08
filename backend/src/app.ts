@@ -233,6 +233,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
       return { status: 'reconciled' };
     } catch (error) {
       if (error instanceof Error && error.message === 'pending_request_not_found') return reply.code(404).send({ error: 'pending_request_not_found' });
+      if (error instanceof Error && error.message === 'provider_request_id_mismatch') return reply.code(409).send({ error: 'provider_request_id_mismatch' });
       if (error instanceof Error && (error.name === 'ZodError' || error.message.startsWith('Provider token total'))) return reply.code(400).send({ error: 'invalid_usage' });
       if (typeof error === 'object' && error !== null && 'code' in error && error.code === '23505') return reply.code(409).send({ error: 'provider_request_already_recorded' });
       request.log.error({ err: error }, 'AI reconciliation failed');

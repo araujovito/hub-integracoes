@@ -10,10 +10,11 @@ export async function reconcileAiUsage(pool: Pool, journalId: string, tenantId: 
     await client.query('BEGIN');
     // Serialize with the same admission lock used by live provider calls.
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`ai-token-budget:${tenantId}`]);
-    const pending = await client.query<{ created_at: Date }>(
-      "SELECT created_at FROM ai_request_journal WHERE id=$1 AND tenant_id=$2 AND status='pending' FOR UPDATE", [journalId, tenantId],
+    const pending = await client.query<{ created_at: Date; provider_request_id: string | null }>(
+      "SELECT created_at, provider_request_id FROM ai_request_journal WHERE id=$1 AND tenant_id=$2 AND status='pending' FOR UPDATE", [journalId, tenantId],
     );
     if (!pending.rows[0]) throw new Error('pending_request_not_found');
+    if (pending.rows[0].provider_request_id && pending.rows[0].provider_request_id !== usage.providerRequestId) throw new Error('provider_request_id_mismatch');
     await client.query(
       `INSERT INTO ai_token_usage (tenant_id, task, provider, model, provider_request_id, input_tokens, output_tokens, total_tokens, cached_input_tokens, reasoning_tokens, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
