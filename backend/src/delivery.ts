@@ -1,7 +1,13 @@
 import type { Pool } from 'pg';
 
+/**
+ * What happened to one stream message. Only `delivered` means this call wrote the
+ * ERP effect; the others acknowledge a duplicate without changing anything.
+ */
+export type DeliveryOutcome = 'delivered' | 'already_delivered' | 'skipped_failed';
+
 /** Persist the simulated ERP side effect and source status in one idempotent transaction. */
-export async function deliverEvent(pool: Pool, eventId: string): Promise<void> {
+export async function deliverEvent(pool: Pool, eventId: string): Promise<DeliveryOutcome> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -12,7 +18,7 @@ export async function deliverEvent(pool: Pool, eventId: string): Promise<void> {
     if (!row) throw new Error('integration_event_not_found');
     if (row.status === 'failed' || row.status === 'delivered') {
       await client.query('COMMIT');
-      return;
+      return row.status === 'failed' ? 'skipped_failed' : 'already_delivered';
     }
 
     await client.query(
@@ -25,6 +31,7 @@ export async function deliverEvent(pool: Pool, eventId: string): Promise<void> {
       `UPDATE integration_events SET status='delivered', last_error=NULL, updated_at=now() WHERE id=$1`, [eventId],
     );
     await client.query('COMMIT');
+    return 'delivered';
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

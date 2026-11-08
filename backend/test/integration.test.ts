@@ -204,7 +204,8 @@ suite('local integration services', () => {
     );
     expect(first.rowCount).toBe(0);
 
-    await Promise.all([deliverEvent(pool!, id), deliverEvent(pool!, id)]);
+    const outcomes = await Promise.all([deliverEvent(pool!, id), deliverEvent(pool!, id)]);
+    expect(outcomes.sort()).toEqual(['already_delivered', 'delivered']);
     const deliveries = await pool!.query('SELECT count(*)::int AS count FROM erp_deliveries WHERE integration_event_id=$1', [id]);
     expect(deliveries.rows[0]?.count).toBe(1);
   });
@@ -227,7 +228,7 @@ suite('local integration services', () => {
        LEFT JOIN dead_letter_events d ON d.integration_event_id=e.id WHERE e.id=$1 GROUP BY e.id`, [id],
     );
     expect(persisted.rows[0]).toMatchObject({ status: 'failed', attempts: 2, dead_letters: 1 });
-    await deliverEvent(pool!, id);
+    expect(await deliverEvent(pool!, id)).toBe('skipped_failed');
     const duplicate = await recordDeliveryFailure(pool!, id, `duplicate-${id}`, 'duplicate', 2);
     const afterDuplicate = await pool!.query("SELECT status, attempts, (SELECT count(*)::int FROM erp_deliveries WHERE integration_event_id=$1) AS deliveries FROM integration_events WHERE id=$1", [id]);
     expect(duplicate.ignored).toBe(true);

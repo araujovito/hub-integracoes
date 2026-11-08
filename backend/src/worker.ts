@@ -36,9 +36,9 @@ async function applyDelivery(streamId: string, fields: Record<string, string>): 
   const eventId = fields.eventId;
   if (!eventId) throw new Error('message_missing_event_id');
 
-  await deliverEvent(pool, eventId);
+  const outcome = await deliverEvent(pool, eventId);
   await redis.xack(config.REDIS_STREAM_KEY, config.REDIS_CONSUMER_GROUP, streamId);
-  console.info(JSON.stringify({ service: 'worker', eventId, streamId, status: 'delivered' }));
+  console.info(JSON.stringify({ service: 'worker', eventId, streamId, status: outcome }));
 }
 
 async function recordFailure(streamId: string, fields: Record<string, string>, error: unknown): Promise<void> {
