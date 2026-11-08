@@ -60,6 +60,8 @@ const apiSecretsSchema = z.object({
       return z.NEVER;
     }
   }),
+  // Bearer token Prometheus uses to scrape GET /metrics. Unset = endpoint off (404).
+  METRICS_TOKEN: z.preprocess((value) => (value === '' ? undefined : value), z.string().min(32).optional()),
   // Only during a master-key rotation: old key(s), comma-separated, used to
   // decrypt until `rotate-master-key` has re-encrypted everything.
   TENANT_SECRETS_KEY_PREVIOUS: z.string().optional().transform((value, context) => {

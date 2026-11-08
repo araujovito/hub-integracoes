@@ -1,0 +1,59 @@
+# Alert rules for the integration hub. Thresholds are starting points for a
+# small deployment; tune them with real traffic. Unit-tested in alerts.test.yml.
+groups:
+  - name: hub-integracoes
+    rules:
+      - alert: HubApiDown
+        expr: up{job="hub-api"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "API não responde ao Prometheus há 2 minutos"
+
+      - alert: HubOutboxStuck
+        # Orders are persisted but not reaching Redis: relay down or Redis unavailable.
+        expr: max(hub_outbox_oldest_age_seconds) > 300
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Outbox com pedido parado há {{ $value | humanizeDuration }}"
+
+      - alert: HubDeadLetters
+        expr: max(hub_dead_letters_pending) > 0
+        for: 1m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} pedido(s) em dead letter aguardando decisão"
+
+      - alert: HubConsumerLagging
+        # Messages read but not acknowledged keep growing: worker stuck or ERP failing.
+        expr: max(hub_redis_stream_pending) > 500
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "{{ $value }} mensagens pendentes no consumer group"
+
+      - alert: HubApiErrorRate
+        expr: |
+          sum(rate(hub_http_requests_total{status=~"5.."}[5m]))
+            / clamp_min(sum(rate(hub_http_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Mais de 5% das respostas da API são 5xx"
+
+      - alert: HubDependencyUnavailable
+        # Webhooks answered 503: PostgreSQL or Redis unreachable from the API.
+        expr: sum(rate(hub_webhooks_total{result="unavailable"}[5m])) > 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Webhooks recusados por dependência indisponível"
+
+      - alert: HubWebhookSignatureFailures
+        # Sustained invalid signatures: a store with a wrong/rotated key, or probing.
+        expr: sum(rate(hub_webhooks_total{result=~"invalid_signature|stale_timestamp"}[10m])) > 0.2
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Muitos webhooks com assinatura inválida ou fora da janela"

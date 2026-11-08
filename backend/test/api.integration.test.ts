@@ -236,4 +236,38 @@ suite('HTTP API with multiple stores', () => {
       expect(response.statusCode).toBe(400);
     }
   });
+
+  it('serves Prometheus metrics only with the metrics token, without store or order ids', async () => {
+    expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(404); // no METRICS_TOKEN configured
+
+    const metricsToken = 'metrics-token-for-tests-with-32-characters';
+    const withMetrics = await buildApp({ pool: db.pool, redis, secrets: { ...secrets, METRICS_TOKEN: metricsToken }, logger: false });
+    try {
+      const body = JSON.stringify(order());
+      const timestamp = nowSeconds();
+      const accepted = await withMetrics.inject({
+        method: 'POST', url: '/v1/webhooks/orders', payload: body,
+        headers: { 'content-type': 'application/json', 'x-tenant-id': storeA.id, 'x-webhook-timestamp': String(timestamp), 'x-webhook-signature': signPayload(body, storeA.webhookSecret, timestamp) },
+      });
+      // The key may have been rotated by an earlier test; either outcome is counted.
+      const result = accepted.statusCode === 202 ? 'accepted' : 'invalid_signature';
+      await withMetrics.inject({ method: 'GET', url: `/v1/operations/dead-letters/${randomUUID()}/redrive` });
+
+      expect((await withMetrics.inject({ method: 'GET', url: '/metrics', headers: { authorization: 'Bearer wrong' } })).statusCode).toBe(401);
+      const scrape = await withMetrics.inject({ method: 'GET', url: '/metrics', headers: { authorization: `Bearer ${metricsToken}` } });
+      expect(scrape.statusCode).toBe(200);
+      expect(scrape.headers['content-type']).toContain('text/plain');
+      const text = scrape.body;
+      expect(text).toContain(`hub_webhooks_total{result="${result}"} 1`);
+      expect(text).toMatch(/hub_http_requests_total\{method="POST",route="\/v1\/webhooks\/orders",status="\d{3}"\} 1/);
+      expect(text).toMatch(/hub_events_backlog\{status="received"\} \d+/);
+      for (const name of ['hub_outbox_unpublished', 'hub_outbox_oldest_age_seconds', 'hub_dead_letters_pending', 'hub_redis_stream_pending', 'hub_deliveries_last_5m', 'hub_process_cpu_user_seconds_total']) {
+        expect(text).toContain(`${name} `);
+      }
+      expect(text).not.toContain(storeA.id);
+      expect(text).not.toMatch(/route="[^"]*[0-9a-f]{8}-[0-9a-f]{4}/); // no ids in route labels
+    } finally {
+      await withMetrics.close();
+    }
+  });
 });

@@ -1,0 +1,56 @@
+# promtool test rules deploy/prometheus/alerts.test.yml
+rule_files: [alerts.yml]
+evaluation_interval: 1m
+tests:
+  - name: outbox stuck fires only after 5 minutes above 300s
+    interval: 1m
+    input_series:
+      - series: 'hub_outbox_oldest_age_seconds{instance="api:3000",job="hub-api"}'
+        values: '0 400 460 520 580 640 700 760'
+    alert_rule_test:
+      - { eval_time: 4m, alertname: HubOutboxStuck, exp_alerts: [] }
+      - eval_time: 7m
+        alertname: HubOutboxStuck
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "Outbox com pedido parado há 12m 40s" }
+
+  - name: dead letters
+    interval: 1m
+    input_series:
+      - series: 'hub_dead_letters_pending{job="hub-api"}'
+        values: '0 0 2 2 2'
+    alert_rule_test:
+      - { eval_time: 2m, alertname: HubDeadLetters, exp_alerts: [] }
+      - eval_time: 4m
+        alertname: HubDeadLetters
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations: { summary: "2 pedido(s) em dead letter aguardando decisão" }
+
+  - name: error rate needs both errors and traffic
+    interval: 1m
+    input_series:
+      - series: 'hub_http_requests_total{route="/v1/webhooks/orders",status="202",method="POST"}'
+        values: '0+60x15'
+      - series: 'hub_http_requests_total{route="/v1/webhooks/orders",status="503",method="POST"}'
+        values: '0x5 0+10x10'
+    alert_rule_test:
+      - { eval_time: 5m, alertname: HubApiErrorRate, exp_alerts: [] }
+      - eval_time: 15m
+        alertname: HubApiErrorRate
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations: { summary: "Mais de 5% das respostas da API são 5xx" }
+
+  - name: api down
+    interval: 1m
+    input_series:
+      - series: 'up{job="hub-api",instance="api:3000"}'
+        values: '1 1 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HubApiDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: hub-api, instance: "api:3000" }
+            exp_annotations: { summary: "API não responde ao Prometheus há 2 minutos" }

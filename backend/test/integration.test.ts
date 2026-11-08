@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Pool } from 'pg';
 import { Redis } from 'ioredis';
@@ -54,7 +55,8 @@ suite('local integration services', () => {
     const result = await pool!.query("SELECT to_regclass('erp_deliveries') AS table_name");
     expect(result.rows[0]?.table_name).toBe('erp_deliveries');
     const migrations = await pool!.query('SELECT count(*)::int AS count FROM schema_migrations');
-    expect(migrations.rows[0]?.count).toBe(11);
+    const migrationFiles = (await readdir(new URL('../../db/migrations/', import.meta.url))).filter((file) => file.endsWith('.sql'));
+    expect(migrations.rows[0]?.count).toBe(migrationFiles.length);
     // Tenant-scoped tables reference tenants (migration 009); later tests write to this tenant.
     await pool!.query('INSERT INTO tenants (id, name) VALUES ($1, $1) ON CONFLICT DO NOTHING', [TENANT]);
   });

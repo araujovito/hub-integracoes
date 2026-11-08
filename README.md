@@ -66,6 +66,13 @@ Webhook assinado → validação → PostgreSQL (evento + outbox na mesma transa
 
 A API recebe webhook assinado e grava evento + outbox na mesma transação. Um relay independente reivindica a outbox com `FOR UPDATE SKIP LOCKED` e publica no Redis Streams. Um worker em consumer group recupera mensagens pendentes via `XAUTOCLAIM`, aplica o efeito numa tabela ERP simulada com chave única e confirma com `XACK` depois do commit. Falhas são contabilizadas e, ao atingir o limite, vão para `dead_letter_events`.
 
+## Monitoramento
+
+- `GET /metrics` (formato Prometheus) só responde com `Authorization: Bearer <METRICS_TOKEN>`; sem `METRICS_TOKEN` configurado, a rota responde 404. Em produção, o Caddy bloqueia `/metrics` para a internet, e o Prometheus coleta por dentro da rede.
+- Métricas: requisições e latência por rota (pelo modelo da rota, nunca a URL com ids), webhooks por resultado (`accepted`, `duplicate`, `invalid_signature`, `stale_timestamp`, `invalid_order`, `unavailable`...), pedidos parados por status, dead letters pendentes, outbox não publicada e idade do item mais antigo, pendências e tamanho do stream, entregas dos últimos 5 minutos, e métricas do processo Node. Nenhum rótulo contém id de loja ou de pedido.
+- `deploy/prometheus/alerts.yml` tem 7 alertas: API fora, outbox parada, dead letters, consumidor atrasado, taxa de 5xx, dependência indisponível e excesso de assinaturas inválidas. Cada alerta tem teste unitário (`alerts.test.yml`, rodado com `promtool` no CI).
+- Prometheus opcional: `docker compose --profile monitoring up -d` (precisa de `METRICS_TOKEN` no `.env`) abre `http://127.0.0.1:9090/alerts`. Não há Alertmanager configurado: quem recebe o aviso e por qual canal é decisão de operação.
+
 ## Retenção
 
 O serviço `maintenance` roda a cada `MAINTENANCE_INTERVAL_SECONDS` (padrão 1 h), com advisory lock para réplicas não se sobreporem:

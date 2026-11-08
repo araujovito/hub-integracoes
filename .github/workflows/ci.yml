@@ -70,6 +70,17 @@ jobs:
       - run: yarn test:integration
       - run: yarn build
 
+  # Alert rules are code too: syntax check plus unit tests of each alert.
+  alert-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: promtool check + test
+        run: |
+          image=prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+          docker run --rm -v "$PWD/deploy/prometheus:/p:ro" -w /p --entrypoint promtool "$image" check rules alerts.yml
+          docker run --rm -v "$PWD/deploy/prometheus:/p:ro" -w /p --entrypoint promtool "$image" test rules alerts.test.yml
+
   # Full pipeline under sustained load while the worker is SIGKILLed and
   # PostgreSQL is stopped and restarted (see scripts/e2e-resilience.sh).
   resilience:

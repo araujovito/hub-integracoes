@@ -29,7 +29,7 @@ Lista do que separa este código de uma operação real. Nada disso está implem
 
 1. **Deploy.** Nunca rodou num servidor público. `compose.prod.yaml` foi testado só localmente, com o certificado interno do Caddy.
 2. **Alta disponibilidade.** É um host só: PostgreSQL e Redis sem réplica nem failover. Para escalar, a API é stateless e o worker escala pelo consumer group, mas banco e Redis precisam de serviço gerenciado ou de replicação.
-3. **Monitoramento e alertas.** Há logs JSON e as rotas `/v1/platform/queue` e `/v1/operations/summary`, mas não há exportação de métricas (Prometheus/OpenTelemetry) nem alerta de backlog, dead letter ou certificado.
+3. **Entrega dos alertas.** Métricas Prometheus e 7 regras de alerta testadas existem, mas sem Alertmanager (canal, plantão) e sem alerta de expiração de certificado.
 6. **Token de plataforma** é estático (arquivo/variável): troca manual, sem expiração. Os tokens de loja já têm papel e validade.
 7. **Backup agendado e fora do servidor.** Os scripts existem; agendar (cron/systemd), cifrar e copiar para outro lugar é configuração de quem opera.
 8. **TLS entre serviços internos.** API, PostgreSQL e Redis conversam em texto claro dentro da rede do Compose. Vale num host só; com serviços em máquinas diferentes, é preciso TLS também ali.

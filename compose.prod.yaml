@@ -94,9 +94,10 @@ services:
       TRUST_PROXY_HOPS: 1
       PLATFORM_ADMIN_TOKEN_FILE: /run/secrets/platform_admin_token
       TENANT_SECRETS_KEY_FILE: /run/secrets/tenant_secrets_key
+      METRICS_TOKEN_FILE: /run/secrets/metrics_token
       DASHBOARD_ENABLED: ${DASHBOARD_ENABLED:-true}
       WEBHOOK_RATE_LIMIT_PER_MINUTE: ${WEBHOOK_RATE_LIMIT_PER_MINUTE:-120}
-    secrets: [database_url, redis_url, platform_admin_token, tenant_secrets_key]
+    secrets: [database_url, redis_url, platform_admin_token, tenant_secrets_key, metrics_token]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -120,6 +121,22 @@ services:
     secrets: [database_url, redis_url]
     healthcheck: *dependency-healthcheck
 
+  # Optional: docker compose -f compose.prod.yaml --profile monitoring up -d
+  # Reachable only from the host (127.0.0.1:9090), e.g. through an SSH tunnel.
+  prometheus:
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    profiles: [monitoring]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    secrets:
+      - source: metrics_token
+        target: /etc/prometheus/metrics_token
+    restart: unless-stopped
+
   maintenance:
     <<: *backend
     command: ["node", "dist/maintenance-runner.js"]
@@ -137,9 +154,11 @@ secrets:
   redis_url: { file: "${SECRETS_DIR:-./secrets}/redis_url" }
   platform_admin_token: { file: "${SECRETS_DIR:-./secrets}/platform_admin_token" }
   tenant_secrets_key: { file: "${SECRETS_DIR:-./secrets}/tenant_secrets_key" }
+  metrics_token: { file: "${SECRETS_DIR:-./secrets}/metrics_token" }
 
 volumes:
   postgres_data:
   redis_data:
   caddy_data:
   caddy_config:
+  prometheus_data:

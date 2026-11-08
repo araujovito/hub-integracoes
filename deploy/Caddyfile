@@ -23,6 +23,9 @@
 		max_size 256KB
 	}
 
+	# Metrics are for Prometheus inside the Compose network, never the internet.
+	respond /metrics 404
+
 	reverse_proxy api:3000 {
 		health_uri /ready
 		health_interval 10s

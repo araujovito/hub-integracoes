@@ -13,6 +13,7 @@ import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
 import { isParsedJson, type ParsedJson } from './json-body.js';
 import { isTransientDatabaseError } from './database.js';
+import { createMetrics } from './metrics.js';
 import {
   activeWebhookSecrets, createAdminToken, createTenant, createWebhookKey,
   listAdminTokens, resolveAdminToken, revokeAdminToken, revokeWebhookKey, TENANT_ID_PATTERN, TenantNotFoundError,
@@ -42,6 +43,22 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
 
   type Reply = { code: (status: number) => { send: (payload: unknown) => unknown } };
   const masterKeys = { current: secrets.TENANT_SECRETS_KEY, previous: secrets.TENANT_SECRETS_KEY_PREVIOUS };
+  const metrics = createMetrics({ pool, redis, streamKey: config.REDIS_STREAM_KEY, group: config.REDIS_CONSUMER_GROUP });
+
+  // Route template (e.g. /v1/operations/dead-letters/:id/redrive), never the raw
+  // URL: ids in paths would explode label cardinality.
+  app.addHook('onResponse', async (request, reply) => {
+    metrics.observeRequest(request.method, request.routeOptions.url ?? 'unmatched', reply.statusCode, reply.elapsedTime / 1000);
+  });
+
+  app.get('/metrics', { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (request, reply) => {
+    if (!secrets.METRICS_TOKEN) return reply.code(404).send({ error: 'not_found' });
+    const authorization = header(request, 'authorization');
+    const supplied = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
+    if (!verifyAdminToken(supplied, secrets.METRICS_TOKEN)) return reply.code(401).send({ error: 'unauthorized' });
+    reply.header('content-type', metrics.registry.contentType);
+    return metrics.registry.metrics();
+  });
 
   function header(request: FastifyRequest, name: string): string | undefined {
     const value = request.headers[name];
@@ -83,6 +100,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     }
     if (isTransientDatabaseError(error) || (error as { name?: string }).name === 'MaxRetriesPerRequestError') {
       request.log.warn({ err: error }, 'dependency unavailable');
+      if (request.routeOptions.url === '/v1/webhooks/orders') metrics.webhook('unavailable');
       return reply.code(503).send({ error: 'temporarily_unavailable' });
     }
     request.log.error({ err: error }, 'unhandled error');
@@ -333,7 +351,10 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     config: { rateLimit: { max: config.WEBHOOK_RATE_LIMIT_PER_MINUTE, timeWindow: '1 minute' } },
   }, async (request, reply) => {
     const body: unknown = request.body;
-    if (!isParsedJson(body)) return reply.code(415).send({ error: 'expected_application_json' });
+    if (!isParsedJson(body)) {
+      metrics.webhook('unsupported_media_type');
+      return reply.code(415).send({ error: 'expected_application_json' });
+    }
     const tenantId = header(request, 'x-tenant-id');
     const signature = header(request, 'x-webhook-signature');
     const keys = tenantId && TENANT_ID_PATTERN.test(tenantId)
@@ -343,16 +364,21 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     // Unknown store, disabled store and wrong signature get the same answer,
     // so the endpoint does not reveal which store ids exist.
     if (!tenantId || timestamp === null || !keys.some((secret) => verifySignature(body.raw, signature, secret, timestamp))) {
+      metrics.webhook('invalid_signature');
       return reply.code(401).send({ error: 'invalid_signature' });
     }
     // Checked after the signature, so only a valid sender learns about clock skew.
     // Inside the window, a replayed request is absorbed by the event-id dedupe.
     if (!isFreshTimestamp(timestamp, Date.now(), config.WEBHOOK_TOLERANCE_SECONDS)) {
+      metrics.webhook('stale_timestamp');
       return reply.code(401).send({ error: 'timestamp_out_of_tolerance', toleranceSeconds: config.WEBHOOK_TOLERANCE_SECONDS });
     }
 
     const parsed = orderSchema.safeParse(body.value);
-    if (!parsed.success) return reply.code(400).send({ error: 'invalid_order', details: parsed.error.issues });
+    if (!parsed.success) {
+      metrics.webhook('invalid_order');
+      return reply.code(400).send({ error: 'invalid_order', details: parsed.error.issues });
+    }
     const order = parsed.data;
     const client = await pool.connect();
     try {
@@ -367,6 +393,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
 
       if (inserted.rowCount === 0) {
         await client.query('COMMIT');
+        metrics.webhook('duplicate');
         return reply.code(200).send({ status: 'duplicate_ignored', eventId: order.eventId });
       }
 
@@ -377,10 +404,12 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
         [eventId, JSON.stringify({ eventId, tenantId: tenantId, order })],
       );
       await client.query('COMMIT');
+      metrics.webhook('accepted');
       return reply.code(202).send({ status: 'accepted', eventId });
     } catch (error) {
       await client.query('ROLLBACK');
       request.log.error({ err: error }, 'order event persistence failed');
+      metrics.webhook('unavailable');
       return reply.code(503).send({ error: 'temporarily_unavailable' });
     } finally {
       client.release();

@@ -14,6 +14,7 @@ export const FILE_BACKED_VARIABLES = [
   'PLATFORM_ADMIN_TOKEN',
   'TENANT_SECRETS_KEY',
   'TENANT_SECRETS_KEY_PREVIOUS',
+  'METRICS_TOKEN',
 ] as const;
 
 type Env = Record<string, string | undefined>;

@@ -43,6 +43,8 @@ services:
       REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
       PLATFORM_ADMIN_TOKEN: ${PLATFORM_ADMIN_TOKEN:?Set PLATFORM_ADMIN_TOKEN in .env}
       TENANT_SECRETS_KEY: ${TENANT_SECRETS_KEY:?Set TENANT_SECRETS_KEY in .env}
+      # Enables GET /metrics for Prometheus (profile "monitoring"); empty = off.
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
       # Only during a master-key rotation (see README).
       TENANT_SECRETS_KEY_PREVIOUS: ${TENANT_SECRETS_KEY_PREVIOUS:-}
       DASHBOARD_ENABLED: ${DASHBOARD_ENABLED:-true}
@@ -135,6 +137,31 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+
+  # Optional: docker compose --profile monitoring up -d  ->  http://127.0.0.1:9090
+  prometheus:
+    image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
+    profiles: [monitoring]
+    ports:
+      - "127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+      - source: prometheus_alerts
+        target: /etc/prometheus/alerts.yml
+      - source: metrics_token
+        target: /etc/prometheus/metrics_token
+    depends_on:
+      api:
+        condition: service_healthy
+
+configs:
+  prometheus_config:
+    file: ./deploy/prometheus/prometheus.yml
+  prometheus_alerts:
+    file: ./deploy/prometheus/alerts.yml
+  metrics_token:
+    content: ${METRICS_TOKEN:-}
 
 volumes:
   postgres_data:
