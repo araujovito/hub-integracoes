@@ -38,7 +38,7 @@ jobs:
       ADMIN_API_TOKEN: ci-only-admin-token-more-than-32-characters
     services:
       postgres:
-        image: postgres:17-alpine
+        image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
         env:
           POSTGRES_USER: hub_test
           POSTGRES_PASSWORD: hub_test_password
@@ -48,7 +48,7 @@ jobs:
           --health-cmd "pg_isready -U hub_test -d hub_test"
           --health-interval 5s --health-timeout 3s --health-retries 10
       redis:
-        image: redis:7.4-alpine
+        image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping"

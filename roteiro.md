@@ -75,7 +75,7 @@ Redis Streams com consumer groups permite distribuir mensagens e mantê-las pend
 
 1. CI executa typecheck, testes unitários/de integração, build, lint, auditoria de dependências e secret scan.
 2. Testes automatizados cobrem recuperação da outbox após falha Redis e recuperação de mensagem pendente via XAUTOCLAIM. Foram validadas manualmente recuperação do relay/worker após indisponibilidade breve do Redis e recuperação da fila após parada/reinício do worker, ambas com entrega única. Ainda faltam testes automatizados de indisponibilidade PostgreSQL, crash/restart do worker e carga sustentada. Foi feito burst local controlado de 30 pedidos + 30 duplicatas concorrentes, com 30 entregas únicas.
-3. Docker executa como usuário não-root; tags das imagens base são explícitas, mas ainda não fixadas por digest. As ações do CI estão fixadas por SHA de commit, com o Dependabot propondo atualizações, e o gitleaks é baixado com versão e checksum fixos; falta fixar as imagens Docker por digest antes de deploy.
+3. Docker executa como usuário não-root; tags das imagens base são explícitas, mas ainda não fixadas por digest. As ações do CI estão fixadas por SHA de commit, com o Dependabot propondo atualizações, e o gitleaks é baixado com versão e checksum fixos; as imagens Docker (Node, PostgreSQL, Redis) também estão fixadas por digest, com o Dependabot propondo novos digests.
 4. Guia local de demonstração, diagrama, decisões ADR, limitações conhecidas e threat model resumido.
 5. Só então considerar deploy de demonstração com dados fictícios, orçamento/limites e segredos gerenciados.
 
