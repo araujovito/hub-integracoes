@@ -29,6 +29,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 - Relay dedicado em `backend/src/outbox-relay.ts`, migrações ordenadas e aditivas, worker em `backend/src/worker.ts`, retry limitado/dead-letter, backoff com jitter em erros de dependência e tabela `erp_deliveries` idempotente (migration `002`).
 - Produção: `compose.prod.yaml` + `deploy/Caddyfile` (HTTPS automático, só o Caddy publica portas, segredos como Docker secrets via `*_FILE`, gerados por `scripts/generate-prod-secrets.sh`; `TRUST_PROXY_HOPS=1`). Testado localmente com `DOMAIN=localhost`; não houve deploy.
 - Backup: `scripts/backup.sh` (pg_dump + sha256 + rotação) e `scripts/restore-test.sh` (restaura em PostgreSQL descartável e roda a imagem da app contra ele); o teste de resiliência faz os dois a cada execução.
+- Dashboard revisado em navegadores reais: `scripts/dashboard-review.sh` (Playwright + axe; job CI `dashboard-review`); capturas em `docs/img`. Localmente o WebKit não roda (faltam libs do sistema).
 - Métricas: `GET /metrics` (prom-client, `backend/src/metrics.ts`) com `METRICS_TOKEN`; regras em `deploy/prometheus/alerts.yml` testadas com promtool (job CI `alert-rules`); Prometheus no perfil `monitoring` dos dois Compose; Caddy bloqueia `/metrics`. Migration `012` cria índices para as consultas de métricas.
 - Tokens de loja (migration `011`): papel `viewer`/`operator` (ações exigem `operator`, senão 403) e validade (`expiresInDays`, padrão 90); `GET /v1/session`; listagem pela plataforma. O dashboard desativa ações para `viewer`.
 - Troca da chave mestra: `TENANT_SECRETS_KEY_PREVIOUS` + `node dist/rotate-master-key.js` (`backend/src/rotate-master-key.ts`); overlay `deploy/compose.rotate-key.yaml` em produção.
@@ -53,7 +54,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 
 Validado em 2026-11-08: lint, typecheck (src + scripts), 31 testes unitários, 30 de integração (`yarn test:integration` contra PostgreSQL/Redis descartáveis), `scripts/e2e-resilience.sh` (carga com SIGKILL no worker e PostgreSQL parado: zero reinícios de api/relay, entrega única, backup restaurado) e `compose.prod.yaml` com `DOMAIN=localhost` (HTTPS, segredos como arquivos). O CI roda tudo isso, menos o teste do Compose de produção. Não houve deploy nem chamada real de IA.
 
-O que falta para uma operação real está em `roteiro.md`, na seção "O que ainda falta". As atualizações de versão principal abertas pelo Dependabot (Node 25, Redis 8, actions v7) não foram aplicadas e precisam de avaliação.
+Projeto de portfólio para LinkedIn: sem deploy, por decisão do autor. Escopo e limites em `roteiro.md` ("Escopo" e "Limites conhecidos no código"). As atualizações de versão principal abertas pelo Dependabot (Node 25, Redis 8, actions v7) não foram aplicadas e precisam de avaliação.
 
 Para rodar o Compose de desenvolvimento, o `.env` precisa de `PLATFORM_ADMIN_TOKEN` e `TENANT_SECRETS_KEY` (ver `.env.example`); as antigas `WEBHOOK_SECRET`, `ADMIN_API_TOKEN` e `DEMO_TENANT_ID` não são mais lidas.
 

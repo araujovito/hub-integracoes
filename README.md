@@ -2,6 +2,10 @@
 
 Hub para receber pedidos de várias lojas por webhook assinado, validá-los, persistir com idempotência e entregá-los de forma assíncrona e confiável a um ERP (simulado). Inclui uma trilha de uso de IA que registra os tokens reportados pelo provedor sem guardar prompts ou respostas.
 
+![Dashboard de operações com eventos entregues, duas dead letters e o painel de tokens de IA vazio](docs/img/dashboard-desktop.png)
+
+<sub>Dados de demonstração gerados por `scripts/dashboard-review.sh --screenshots`. As dead letters são falhas do ERP simuladas no banco; o painel de IA fica vazio porque nenhuma chamada real foi feita. Versão celular: [`docs/img/dashboard-mobile.png`](docs/img/dashboard-mobile.png).</sub>
+
 ## Ambiente local
 
 Requisitos: Node.js 22+ (a imagem Docker e o CI usam Node.js 24 LTS), Yarn 1.22+ e Docker Compose.
@@ -152,6 +156,12 @@ scripts/restore-test.sh /caminho/backups/hub-<data>.dump                  # prov
 - `restore-test.sh` confere o checksum, restaura num PostgreSQL descartável (mesma imagem da produção) com `--exit-on-error` e roda a imagem da aplicação contra o banco restaurado. As migrations precisam bater pelo checksum, e o script mostra a contagem das tabelas. Não toca na stack em execução. O teste de resiliência do CI faz backup e restauração a cada push e compara a contagem com o banco de origem.
 - Restaurar de verdade é uma decisão de operação: parar api/relay/worker/maintenance e rodar `pg_restore --clean --if-exists` no banco de produção. Isso substitui os dados atuais, então não está automatizado.
 - O dump não contém `TENANT_SECRETS_KEY`. Sem essa chave, as chaves de webhook restauradas não podem ser lidas e as lojas precisam de chaves novas.
+
+## Dashboard
+
+`/dashboard` é uma página única, sem CDN e com CSP por nonce. O token fica só na memória da aba. A página mostra a loja, o papel e a validade do token, e desativa as ações para `viewer`.
+
+`scripts/dashboard-review.sh` sobe uma stack isolada com dados de demonstração e abre o dashboard em Chromium, Firefox e WebKit, em tela de computador e de celular. Ele falha em caso de violação WCAG 2.1 AA (axe), erro no console ou bloqueio da CSP, rolagem horizontal, login impossível só com teclado, foco sem contorno visível, botões ativos para `viewer` ou botão de reprocessar fora da área visível. Roda no CI a cada push; `--screenshots` gera as imagens deste README.
 
 ## Verificação e documentação
 

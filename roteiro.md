@@ -21,22 +21,28 @@ Loja ── HTTPS ──> Caddy ──> API ──> PostgreSQL (evento + outbox 
 | Retenção | Trim do stream sem tocar em pendentes/não lidas; payloads entregues limpos após 90 dias, identidade preservada | Testes de integração com Redis e PostgreSQL reais |
 | Produção | `compose.prod.yaml`: Caddy com HTTPS automático, só o Caddy com portas publicadas, segredos como arquivos (`*_FILE`), um proxy confiável | Stack local com `DOMAIN=localhost`: TLS 1.3, HSTS, 413 na borda, IP real do cliente nos logs |
 | Backup | `backup.sh` (pg_dump + SHA-256 + rotação), `restore-test.sh` (restaura e roda a aplicação contra o banco) | A cada push, no teste de resiliência, com contagem comparada à origem |
+| Monitoramento | `/metrics` (Prometheus) com token; 7 regras de alerta com testes; Prometheus opcional | Testes de integração, `promtool test rules` no CI, Compose local e de produção |
+| Dashboard | Acessível (WCAG 2.1 AA), status em português, papel e validade do token, ações bloqueadas para `viewer` | `scripts/dashboard-review.sh` em Chromium, Firefox e WebKit no CI |
+| Banco | `statement_timeout` e `idle_in_transaction_session_timeout` em toda conexão; troca da chave mestra sem parada | Testes de integração; troca de chave no Compose local |
 | Cadeia de suprimentos | Node 24 LTS; imagens e ações fixadas por digest/SHA; Dependabot; gitleaks com checksum sobre todo o histórico; `yarn audit` | CI |
 
-## O que ainda falta
+## Escopo
 
-Lista do que separa este código de uma operação real. Nada disso está implementado:
+Este é um projeto de portfólio, para demonstração pública do código. **Não haverá deploy num servidor real**, por decisão. A configuração de produção (`compose.prod.yaml`) existe e foi testada localmente, para mostrar como o sistema rodaria, mas os itens que dependem de infraestrutura paga ou de operação contínua ficam fora do escopo, e não pendentes:
 
-1. **Deploy.** Nunca rodou num servidor público. `compose.prod.yaml` foi testado só localmente, com o certificado interno do Caddy.
-2. **Alta disponibilidade.** É um host só: PostgreSQL e Redis sem réplica nem failover. Para escalar, a API é stateless e o worker escala pelo consumer group, mas banco e Redis precisam de serviço gerenciado ou de replicação.
-3. **Entrega dos alertas.** Métricas Prometheus e 7 regras de alerta testadas existem, mas sem Alertmanager (canal, plantão) e sem alerta de expiração de certificado.
-6. **Token de plataforma** é estático (arquivo/variável): troca manual, sem expiração. Os tokens de loja já têm papel e validade.
-7. **Backup agendado e fora do servidor.** Os scripts existem; agendar (cron/systemd), cifrar e copiar para outro lugar é configuração de quem opera.
-8. **TLS entre serviços internos.** API, PostgreSQL e Redis conversam em texto claro dentro da rede do Compose. Vale num host só; com serviços em máquinas diferentes, é preciso TLS também ali.
-9. **Integração com ERP real.** O destino é uma tabela simulada. Um ERP real traz timeouts, limites e erros próprios, que o worker teria de tratar.
-10. **Chamada real de IA.** O adaptador nunca foi chamado de verdade, porque gera custo. O modelo padrão `gpt-6-luna` só foi confirmado em catálogos de terceiros.
-11. **Dashboard:** falta revisão manual em navegadores e de acessibilidade, e não há capturas na documentação.
-12. **Atualizações de versão principal** propostas pelo Dependabot (Node 25, Redis 8, actions v7) estão abertas e precisam de avaliação: Node 25 não é LTS, e o Redis 8 muda de licença.
+- servidor, domínio e certificado público;
+- alta disponibilidade (réplica e failover de PostgreSQL e Redis);
+- entrega dos alertas (Alertmanager, canal, plantão); as regras e as métricas existem e são testadas;
+- backup agendado e copiado para fora do servidor; os scripts de backup e de teste de restauração existem;
+- TLS entre serviços em máquinas diferentes;
+- integração com um ERP real;
+- chamada real de IA, que gera custo (o modelo padrão `gpt-6-luna` só foi confirmado em catálogos de terceiros).
+
+## Limites conhecidos no código
+
+1. O token de plataforma é estático (arquivo ou variável de ambiente): a troca é manual e ele não expira. Os tokens de loja têm papel e validade.
+2. Atualizações de versão principal propostas pelo Dependabot (Node 25, Redis 8, actions v7) estão abertas e não foram aplicadas: Node 25 não é LTS, e o Redis 8 muda de licença.
+3. No ambiente de desenvolvimento usado aqui, o WebKit não roda localmente (faltam bibliotecas do sistema); a revisão do dashboard nele acontece só no CI.
 
 ## Critérios de pronto (MVP)
 

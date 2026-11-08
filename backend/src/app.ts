@@ -144,7 +144,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     if (config.DASHBOARD_ENABLED !== 'true') return reply.code(404).send({ error: 'not_found' });
     const nonce = randomBytes(18).toString('base64');
     reply.header('cache-control', 'no-store');
-    reply.header('content-security-policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`);
+    reply.header('content-security-policy', `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'`);
     return reply.type('text/html; charset=utf-8')
       .send(dashboardHtml.replace('<script>', `<script nonce="${nonce}">`).replace('<style>', `<style nonce="${nonce}">`));
   });
