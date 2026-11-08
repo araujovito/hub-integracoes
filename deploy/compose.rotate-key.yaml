@@ -1,0 +1,16 @@
+# Overlay used only while rotating TENANT_SECRETS_KEY in production:
+#   1. move the old key to secrets/tenant_secrets_key_previous and write the new
+#      one to secrets/tenant_secrets_key;
+#   2. docker compose -f compose.prod.yaml -f deploy/compose.rotate-key.yaml up -d api
+#   3. docker compose -f compose.prod.yaml -f deploy/compose.rotate-key.yaml exec api node dist/rotate-master-key.js
+#   4. once it reports "unreadable": [] (and 0 re-encrypted on a second run):
+#      docker compose -f compose.prod.yaml up -d api   # without this overlay
+#      then delete secrets/tenant_secrets_key_previous.
+services:
+  api:
+    environment:
+      TENANT_SECRETS_KEY_PREVIOUS_FILE: /run/secrets/tenant_secrets_key_previous
+    secrets: [tenant_secrets_key_previous]
+
+secrets:
+  tenant_secrets_key_previous: { file: "${SECRETS_DIR:-./secrets}/tenant_secrets_key_previous" }

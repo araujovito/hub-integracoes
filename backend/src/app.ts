@@ -40,6 +40,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   const dashboardHtml = await readFile(resolve(process.cwd(), '../dashboard/index.html'), 'utf8').catch(() => '<h1>Dashboard asset unavailable</h1>');
 
   type Reply = { code: (status: number) => { send: (payload: unknown) => unknown } };
+  const masterKeys = { current: secrets.TENANT_SECRETS_KEY, previous: secrets.TENANT_SECRETS_KEY_PREVIOUS };
 
   function header(request: FastifyRequest, name: string): string | undefined {
     const value = request.headers[name];
@@ -313,7 +314,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     const tenantId = header(request, 'x-tenant-id');
     const signature = header(request, 'x-webhook-signature');
     const keys = tenantId && TENANT_ID_PATTERN.test(tenantId)
-      ? await activeWebhookSecrets(pool, secrets.TENANT_SECRETS_KEY, tenantId)
+      ? await activeWebhookSecrets(pool, masterKeys, tenantId)
       : [];
     const timestamp = parseWebhookTimestamp(header(request, 'x-webhook-timestamp'));
     // Unknown store, disabled store and wrong signature get the same answer,
@@ -447,7 +448,7 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     const data = z.object({ graceHours: z.number().min(0).max(24 * 30).default(24) }).strict().safeParse(request.body?.value ?? {});
     if (!params.success || !data.success) return reply.code(400).send({ error: 'invalid_request' });
     try {
-      const key = await createWebhookKey(pool, secrets.TENANT_SECRETS_KEY, params.data.tenantId, Math.round(data.data.graceHours * 3600));
+      const key = await createWebhookKey(pool, masterKeys, params.data.tenantId, Math.round(data.data.graceHours * 3600));
       reply.header('cache-control', 'no-store');
       return reply.code(201).send({ ...key, previousKeysValidForHours: data.data.graceHours });
     } catch (error) {

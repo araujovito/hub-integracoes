@@ -30,3 +30,21 @@ describe('tenant secret encryption', () => {
     expect(() => parseMasterKey(randomBytes(16).toString('base64'))).toThrow('32 bytes');
   });
 });
+
+describe('master key ring', async () => {
+  const { decryptWithKeyRing } = await import('../src/tenant-crypto.js');
+  const oldKey = randomBytes(32);
+  const newKey = randomBytes(32);
+
+  it('decrypts with the current key first and reports which key worked', () => {
+    const underNew = encryptSecret(newKey, 's', 'ctx');
+    const underOld = encryptSecret(oldKey, 's', 'ctx');
+    expect(decryptWithKeyRing({ current: newKey, previous: [oldKey] }, underNew, 'ctx')).toEqual({ plaintext: 's', current: true });
+    expect(decryptWithKeyRing({ current: newKey, previous: [oldKey] }, underOld, 'ctx')).toEqual({ plaintext: 's', current: false });
+  });
+
+  it('fails when no configured key opens the secret', () => {
+    const underOld = encryptSecret(oldKey, 's', 'ctx');
+    expect(() => decryptWithKeyRing({ current: newKey, previous: [] }, underOld, 'ctx')).toThrow();
+  });
+});

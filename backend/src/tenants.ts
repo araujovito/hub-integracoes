@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { decryptSecret, encryptSecret } from './tenant-crypto.js';
+import { decryptWithKeyRing, encryptSecret, type MasterKeys } from './tenant-crypto.js';
 
 export const TENANT_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const ADMIN_TOKEN_PREFIX = 'hub_adm_';
@@ -22,7 +22,7 @@ export async function createTenant(pool: Pool, id: string, name: string): Promis
  * `graceSeconds`, giving the store time to switch without rejected deliveries.
  * The plaintext secret is returned once and never stored unencrypted.
  */
-export async function createWebhookKey(pool: Pool, masterKey: Buffer, tenantId: string, graceSeconds: number) {
+export async function createWebhookKey(pool: Pool, keys: MasterKeys, tenantId: string, graceSeconds: number) {
   const keyId = randomUUID();
   const secret = randomBytes(32).toString('base64url');
   const client = await pool.connect();
@@ -38,7 +38,7 @@ export async function createWebhookKey(pool: Pool, masterKey: Buffer, tenantId: 
     );
     await client.query(
       'INSERT INTO tenant_webhook_keys (id, tenant_id, secret_ciphertext) VALUES ($1, $2, $3)',
-      [keyId, tenantId, encryptSecret(masterKey, secret, webhookKeyContext(tenantId, keyId))],
+      [keyId, tenantId, encryptSecret(keys.current, secret, webhookKeyContext(tenantId, keyId))],
     );
     await client.query('COMMIT');
     return { keyId, secret };
@@ -57,8 +57,13 @@ export async function revokeWebhookKey(pool: Pool, tenantId: string, keyId: stri
   return (result.rowCount ?? 0) > 0;
 }
 
-/** Secrets currently accepted for a tenant (empty for unknown or disabled tenants). */
-export async function activeWebhookSecrets(pool: Pool, masterKey: Buffer, tenantId: string): Promise<string[]> {
+/**
+ * Secrets currently accepted for a tenant (empty for unknown or disabled tenants).
+ * A row no configured master key can open (wrong or lost TENANT_SECRETS_KEY) is
+ * skipped with a warning instead of failing the whole request: the store's other
+ * keys keep working and the problem shows up in the logs.
+ */
+export async function activeWebhookSecrets(pool: Pool, keys: MasterKeys, tenantId: string): Promise<string[]> {
   const result = await pool.query<{ id: string; secret_ciphertext: Buffer }>(
     `SELECT k.id, k.secret_ciphertext FROM tenant_webhook_keys k JOIN tenants t ON t.id = k.tenant_id
       WHERE k.tenant_id=$1 AND t.disabled_at IS NULL AND k.revoked_at IS NULL
@@ -66,7 +71,15 @@ export async function activeWebhookSecrets(pool: Pool, masterKey: Buffer, tenant
       ORDER BY k.created_at DESC LIMIT 5`,
     [tenantId],
   );
-  return result.rows.map((row) => decryptSecret(masterKey, row.secret_ciphertext, webhookKeyContext(tenantId, row.id)));
+  const secrets: string[] = [];
+  for (const row of result.rows) {
+    try {
+      secrets.push(decryptWithKeyRing(keys, row.secret_ciphertext, webhookKeyContext(tenantId, row.id)).plaintext);
+    } catch {
+      console.warn(JSON.stringify({ service: 'api', status: 'webhook_key_unreadable', tenantId, keyId: row.id }));
+    }
+  }
+  return secrets;
 }
 
 /** Issue an admin token scoped to one tenant. Returned once; only its digest is stored. */
@@ -97,4 +110,51 @@ export async function resolveAdminToken(pool: Pool, token: string | undefined): 
     [digest(token)],
   );
   return result.rows[0]?.tenant_id ?? null;
+}
+
+export type ReencryptionResult = { reencrypted: number; alreadyCurrent: number; unreadable: string[] };
+
+/**
+ * Master-key rotation step: re-encrypt every stored webhook secret (revoked ones
+ * included) under the current key. Rows only readable with a previous key are
+ * rewritten; rows readable with no configured key are reported, never touched.
+ * Safe to run repeatedly and while the API serves traffic (row locks, batches).
+ */
+export async function reencryptWebhookKeys(pool: Pool, keys: MasterKeys, batchSize = 200): Promise<ReencryptionResult> {
+  const result: ReencryptionResult = { reencrypted: 0, alreadyCurrent: 0, unreadable: [] };
+  let after = '00000000-0000-0000-0000-000000000000';
+  for (;;) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const rows = await client.query<{ id: string; tenant_id: string; secret_ciphertext: Buffer }>(
+        'SELECT id, tenant_id, secret_ciphertext FROM tenant_webhook_keys WHERE id > $1 ORDER BY id LIMIT $2 FOR UPDATE',
+        [after, batchSize],
+      );
+      for (const row of rows.rows) {
+        const context = webhookKeyContext(row.tenant_id, row.id);
+        let opened: { plaintext: string; current: boolean };
+        try {
+          opened = decryptWithKeyRing(keys, row.secret_ciphertext, context);
+        } catch {
+          result.unreadable.push(row.id);
+          continue;
+        }
+        if (opened.current) {
+          result.alreadyCurrent += 1;
+          continue;
+        }
+        await client.query('UPDATE tenant_webhook_keys SET secret_ciphertext=$2 WHERE id=$1', [row.id, encryptSecret(keys.current, opened.plaintext, context)]);
+        result.reencrypted += 1;
+      }
+      await client.query('COMMIT');
+      if (rows.rows.length < batchSize) return result;
+      after = rows.rows.at(-1)!.id;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }

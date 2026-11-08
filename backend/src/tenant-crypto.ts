@@ -34,3 +34,25 @@ export function decryptSecret(masterKey: Buffer, sealed: Buffer, context: string
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(sealed.subarray(1 + IV_BYTES + TAG_BYTES)), decipher.final()]).toString('utf8');
 }
+
+/** Current key encrypts; previous keys only decrypt, during a master-key rotation. */
+export type MasterKeys = { current: Buffer; previous: Buffer[] };
+
+/**
+ * Decrypt with the current key, falling back to previous ones. AES-GCM fails
+ * authentication with the wrong key, so trying keys in order is safe.
+ */
+export function decryptWithKeyRing(keys: MasterKeys, sealed: Buffer, context: string): { plaintext: string; current: boolean } {
+  try {
+    return { plaintext: decryptSecret(keys.current, sealed, context), current: true };
+  } catch (error) {
+    for (const key of keys.previous) {
+      try {
+        return { plaintext: decryptSecret(key, sealed, context), current: false };
+      } catch {
+        // try the next key
+      }
+    }
+    throw error;
+  }
+}

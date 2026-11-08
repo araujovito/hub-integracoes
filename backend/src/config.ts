@@ -60,6 +60,17 @@ const apiSecretsSchema = z.object({
       return z.NEVER;
     }
   }),
+  // Only during a master-key rotation: old key(s), comma-separated, used to
+  // decrypt until `rotate-master-key` has re-encrypted everything.
+  TENANT_SECRETS_KEY_PREVIOUS: z.string().optional().transform((value, context) => {
+    if (!value?.trim()) return [];
+    try {
+      return value.split(',').map((part) => parseMasterKey(part.trim()));
+    } catch (error) {
+      context.addIssue({ code: 'custom', message: `TENANT_SECRETS_KEY_PREVIOUS: ${(error as Error).message}` });
+      return z.NEVER;
+    }
+  }),
 });
 
 export type ApiSecrets = z.infer<typeof apiSecretsSchema>;

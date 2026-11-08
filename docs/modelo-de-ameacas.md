@@ -32,7 +32,7 @@ Em `compose.prod.yaml`, PostgreSQL, Redis e API ficam só na rede interna do Com
 | Acesso indevido a operações | token admin por loja (SHA-256 no banco), revogável; token de plataforma separado; rate limit | Tokens sem expiração automática e sem papéis dentro da loja |
 | Exposição em logs | logs estruturados sem corpo; headers de autenticação mascarados | Revisar logging/telemetria ao incluir novos campos e fornecedores |
 | Vazamento de prompt/resposta | ledger guarda metadados e tokens, nunca conteúdo | Demo de provider usa prompt fixo; definir retenção e avaliar privacidade antes de prompts de usuário |
-| Segredo comprometido | produção com Docker secrets (`*_FILE`), nada no ambiente; chaves de webhook cifradas no banco; gitleaks com histórico completo no CI e push protection do GitHub | `TENANT_SECRETS_KEY` sem procedimento de rotação |
+| Segredo comprometido | produção com Docker secrets (`*_FILE`), nada no ambiente; chaves de webhook cifradas no banco; gitleaks com histórico completo no CI e push protection do GitHub | Troca da `TENANT_SECRETS_KEY` sem parada (`rotate-master-key`); a troca é manual |
 | Escuta na rede | HTTPS com TLS 1.3 e HSTS na borda (Caddy) | Tráfego interno sem TLS (host único) |
 | Perda de dados | backup com SHA-256 e teste de restauração a cada push; retenção que preserva dead letters | Agendamento e cópia cifrada fora do servidor ficam por conta da operação |
 | Indisponibilidade de dependência | processos sobrevivem a queda do PostgreSQL; 503 sem detalhes internos; outbox segura pedidos com o Redis fora | Sem réplica nem failover; sem alertas |

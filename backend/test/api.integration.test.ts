@@ -13,6 +13,7 @@ const suite = enabled ? describe : describe.skip;
 const secrets = {
   PLATFORM_ADMIN_TOKEN: 'api-test-platform-token-with-32-characters-or-more',
   TENANT_SECRETS_KEY: randomBytes(32),
+  TENANT_SECRETS_KEY_PREVIOUS: [] as Buffer[],
 };
 const platform = { 'x-platform-token': secrets.PLATFORM_ADMIN_TOKEN };
 

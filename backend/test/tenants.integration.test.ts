@@ -2,13 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   activeWebhookSecrets, createAdminToken, createTenant, createWebhookKey,
-  resolveAdminToken, revokeAdminToken, revokeWebhookKey, TenantNotFoundError,
+  reencryptWebhookKeys, resolveAdminToken, revokeAdminToken, revokeWebhookKey, TenantNotFoundError,
 } from '../src/tenants.js';
 import { createIsolatedDatabase } from './helpers/isolated-db.js';
 
 const enabled = process.env.RUN_INTEGRATION_TESTS === 'true';
 const suite = enabled ? describe : describe.skip;
-const masterKey = randomBytes(32);
+const masterKey = { current: randomBytes(32), previous: [] as Buffer[] };
 let db: Awaited<ReturnType<typeof createIsolatedDatabase>>;
 
 beforeAll(async () => { if (enabled) db = await createIsolatedDatabase(); });
@@ -63,5 +63,42 @@ suite('tenant store', () => {
     expect(await resolveAdminToken(db.pool, b.token)).toBeNull();
     await expect(createAdminToken(db.pool, 'loja-b', 'x')).rejects.toBeInstanceOf(TenantNotFoundError);
     await expect(createWebhookKey(db.pool, masterKey, 'loja-b', 0)).rejects.toBeInstanceOf(TenantNotFoundError);
+  });
+
+  it('rotates the master key without losing any webhook secret', async () => {
+    await createTenant(db.pool, 'loja-rot', 'Rotação');
+    const oldRing = { current: randomBytes(32), previous: [] as Buffer[] };
+    const kept = await createWebhookKey(db.pool, oldRing, 'loja-rot', 3600);
+    const revoked = await createWebhookKey(db.pool, oldRing, 'loja-rot', 3600);
+    await revokeWebhookKey(db.pool, 'loja-rot', revoked.keyId);
+
+    // Step 1: new key is current, old one still decrypts.
+    const transition = { current: randomBytes(32), previous: [oldRing.current] };
+    expect(await activeWebhookSecrets(db.pool, transition, 'loja-rot')).toEqual([kept.secret]);
+    const created = await createWebhookKey(db.pool, transition, 'loja-rot', 3600); // written with the new key
+
+    // Step 2: re-encrypt; only the rows under the old key change (revoked ones too).
+    // Other stores in this schema were encrypted under an unrelated key: they must
+    // be reported as unreadable (and left alone), exactly those and nothing else.
+    const others = await db.pool.query<{ id: string }>("SELECT id FROM tenant_webhook_keys WHERE tenant_id <> 'loja-rot' ORDER BY id");
+    const first = await reencryptWebhookKeys(db.pool, transition, 1);
+    expect(first.unreadable).toEqual(others.rows.map((row) => row.id));
+    expect(first.reencrypted).toBe(2);
+    expect(first.alreadyCurrent).toBe(1);
+    const second = await reencryptWebhookKeys(db.pool, transition);
+    expect(second.reencrypted).toBe(0);
+
+    // Step 3: previous key removed; everything still verifies.
+    const finalRing = { current: transition.current, previous: [] as Buffer[] };
+    expect(new Set(await activeWebhookSecrets(db.pool, finalRing, 'loja-rot'))).toEqual(new Set([kept.secret, created.secret]));
+
+    // With the wrong master key, unreadable keys are skipped, not a crash.
+    expect(await activeWebhookSecrets(db.pool, { current: randomBytes(32), previous: [] }, 'loja-rot')).toEqual([]);
+
+    // A wrong ring reports rows as unreadable and changes nothing.
+    const wrong = await reencryptWebhookKeys(db.pool, { current: randomBytes(32), previous: [] });
+    expect(wrong.reencrypted).toBe(0);
+    expect(wrong.unreadable.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(await activeWebhookSecrets(db.pool, finalRing, 'loja-rot'))).toEqual(new Set([kept.secret, created.secret]));
   });
 });

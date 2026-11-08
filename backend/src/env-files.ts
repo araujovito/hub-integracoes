@@ -13,6 +13,7 @@ export const FILE_BACKED_VARIABLES = [
   'OPENAI_API_KEY',
   'PLATFORM_ADMIN_TOKEN',
   'TENANT_SECRETS_KEY',
+  'TENANT_SECRETS_KEY_PREVIOUS',
 ] as const;
 
 type Env = Record<string, string | undefined>;

@@ -13,6 +13,7 @@
     "start:relay": "node dist/outbox-relay.js",
     "start:worker": "node dist/worker.js",
     "start:maintenance": "node dist/maintenance-runner.js",
+    "rotate-master-key": "node dist/rotate-master-key.js",
     "test": "vitest run",
     "test:load": "tsx scripts/load-test.ts",
     "test:integration": "RUN_INTEGRATION_TESTS=true vitest run test/integration.test.ts test/*.integration.test.ts",

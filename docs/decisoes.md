@@ -46,7 +46,7 @@
 
 **Motivo:** o HMAC exige o segredo em claro na verificação, então ele não pode ser hash. Já o token admin só precisa ser comparado, e por ser aleatório de 256 bits dispensa bcrypt/argon2. Os dados autenticados impedem que o ciphertext de uma loja, copiado para outra no banco, decifre.
 
-**Consequência:** `TENANT_SECRETS_KEY` vira o segredo mais crítico do sistema. Ele fica fora do banco e do backup, e precisa de cópia própria. A rotação dele ainda não está implementada.
+**Consequência:** `TENANT_SECRETS_KEY` vira o segredo mais crítico do sistema. Ele fica fora do banco e do backup, e precisa de cópia própria. A troca é feita sem parada: a chave antiga só decifra enquanto `rotate-master-key` recifra as linhas (ADR-012).
 
 ## ADR-007 — Proteção contra replay por horário assinado
 
@@ -87,3 +87,11 @@
 **Motivo:** o teste de resiliência mostrou os processos morrendo quando o PostgreSQL reiniciava (evento `error` não tratado) e entrando em loop de reinício na partida. Clientes ficavam sem resposta em vez de receber um 503 para tentar de novo.
 
 **Consequência:** o teste de resiliência falha se api ou relay reiniciarem, ou se algum pedido ficar sem resposta HTTP.
+
+## ADR-012 — Troca da chave mestra por chaveiro com tentativa em ordem
+
+**Decisão:** `TENANT_SECRETS_KEY` (atual) mais `TENANT_SECRETS_KEY_PREVIOUS` (só durante a troca). A decifragem tenta a atual e depois as anteriores; um comando recifra as linhas com a atual.
+
+**Motivo:** no AES-GCM, a chave errada falha na autenticação, então tentar em ordem é seguro e dispensa gravar um identificador de chave no formato. O comando é idempotente e roda com a API no ar, com lock por linha e em lotes.
+
+**Consequência:** durante a troca, a leitura de uma linha antiga custa uma decifragem a mais. Uma linha que nenhuma chave abre é ignorada com aviso: a loja perde só aquela chave, não o webhook inteiro.
