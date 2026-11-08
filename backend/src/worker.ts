@@ -104,7 +104,10 @@ try {
         for (const entry of entries) await processEntry(entry);
       }
       failures = 0;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('NOGROUP')) {
+        try { await ensureConsumerGroup(); } catch { /* retry on the next loop */ }
+      }
       failures += 1;
       const delayMs = retryDelay(failures);
       console.error(JSON.stringify({ service: 'worker', status: 'retrying', failures, delayMs }));
