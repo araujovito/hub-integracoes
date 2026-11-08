@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { config, type ApiSecrets } from './config.js';
 import { orderSchema } from './orders.js';
-import { verifyAdminToken, verifySignature } from './security.js';
+import { isFreshTimestamp, parseWebhookTimestamp, verifyAdminToken, verifySignature } from './security.js';
 import { isOpenAiConfigured, runTokenMeterDemo } from './openai-provider.js';
 import { reconcileAiUsage } from './ai-reconciliation.js';
 import { isParsedJson, type ParsedJson } from './json-body.js';
@@ -297,10 +297,16 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
     const keys = tenantId && TENANT_ID_PATTERN.test(tenantId)
       ? await activeWebhookSecrets(pool, secrets.TENANT_SECRETS_KEY, tenantId)
       : [];
+    const timestamp = parseWebhookTimestamp(header(request, 'x-webhook-timestamp'));
     // Unknown store, disabled store and wrong signature get the same answer,
     // so the endpoint does not reveal which store ids exist.
-    if (!tenantId || !keys.some((secret) => verifySignature(body.raw, signature, secret))) {
+    if (!tenantId || timestamp === null || !keys.some((secret) => verifySignature(body.raw, signature, secret, timestamp))) {
       return reply.code(401).send({ error: 'invalid_signature' });
+    }
+    // Checked after the signature, so only a valid sender learns about clock skew.
+    // Inside the window, a replayed request is absorbed by the event-id dedupe.
+    if (!isFreshTimestamp(timestamp, Date.now(), config.WEBHOOK_TOLERANCE_SECONDS)) {
+      return reply.code(401).send({ error: 'timestamp_out_of_tolerance', toleranceSeconds: config.WEBHOOK_TOLERANCE_SECONDS });
     }
 
     const parsed = orderSchema.safeParse(body.value);

@@ -20,7 +20,9 @@ Redis/PostgreSQL são dependências internas confiáveis no Compose de desenvolv
 
 | Ameaça | Mitigação implementada | Limitação / próximo passo |
 | --- | --- | --- |
-| Webhook forjado ou corpo alterado | HMAC SHA-256 do corpo bruto e comparação em tempo constante | Sem timestamp/nonce: replay exato é aceito, embora deduplicado por event ID |
+| Webhook forjado ou corpo alterado | HMAC SHA-256 de horário + corpo bruto com a chave da loja, comparação em tempo constante | Chave vazada vale até a revogação; revogar e emitir outra com `graceHours: 0` |
+| Replay de requisição capturada | horário assinado com janela de 300 s; dentro dela, deduplicação por `eventId` | Depende de relógio sincronizado no remetente |
+| Acesso cruzado entre lojas | token admin resolvido para a loja; todas as consultas filtram por ela; testes de integração de isolamento | Plataforma e lojas usam tokens estáticos, sem expiração automática |
 | Payload abusivo | limite de 256 KiB, schema estrito e rate limit armazenado no Redis compartilhado | Se Redis ficar indisponível, rotas limitadas falham fechadas; monitorar isso porque também afeta webhooks |
 | Evento duplicado | unique key tenant/origem/evento; chave única no ERP simulado | Chaves do demo não são credenciais separadas por cliente |
 | Perda entre persistência e fila | outbox transacional | PostgreSQL/Redis sem transação comum; possível publicação duplicada, tratada no consumidor |

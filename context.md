@@ -20,7 +20,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 
 ## Implementado
 
-- `POST /v1/webhooks/orders`: HMAC-SHA256 do corpo bruto, comparação em tempo constante, schema estrito, limite de tamanho e rate limit Redis compartilhado; grava `integration_events` e `outbox_events` na mesma transação; deduplica com unique key.
+- `POST /v1/webhooks/orders`: `X-Tenant-Id` + `X-Webhook-Timestamp` + HMAC-SHA256 de `<timestamp>.<corpo bruto>` com a chave da loja; janela `WEBHOOK_TOLERANCE_SECONDS` (300 s) contra replay; comparação em tempo constante, schema estrito, limite de tamanho e rate limit Redis compartilhado; grava `integration_events` e `outbox_events` na mesma transação; deduplica com unique key.
 - O webhook responde 415 `expected_application_json` quando o corpo não veio do parser JSON do app (sem corpo, `text/plain` etc.), antes de verificar o HMAC; antes disso esses casos davam 500 com a mensagem interna (`backend/src/json-body.ts`).
 - `GET /health`: liveness do processo; `GET /ready`: readiness que testa PostgreSQL e Redis.
 - `GET /v1/usage/tokens`: exige `X-Admin-Token`, aceita período e retorna tokens agregados por modelo/tarefa e total do período.

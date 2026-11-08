@@ -53,10 +53,15 @@ function order(eventId = `evt-${randomUUID()}`) {
   return { eventId, orderId: `order-${randomUUID()}`, currency: 'BRL', amountCents: 1990, items: [{ sku: 'SKU-1', quantity: 2 }] };
 }
 
-function postWebhook(tenantId: string, secret: string, body = JSON.stringify(order())) {
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+
+function postWebhook(tenantId: string, secret: string, body = JSON.stringify(order()), timestamp = nowSeconds()) {
   return app.inject({
     method: 'POST', url: '/v1/webhooks/orders', payload: body,
-    headers: { 'content-type': 'application/json', 'x-tenant-id': tenantId, 'x-webhook-signature': signPayload(body, secret) },
+    headers: {
+      'content-type': 'application/json', 'x-tenant-id': tenantId,
+      'x-webhook-timestamp': String(timestamp), 'x-webhook-signature': signPayload(body, secret, timestamp),
+    },
   });
 }
 
@@ -121,6 +126,37 @@ suite('HTTP API with multiple stores', () => {
     expect(platformTokenOnStore.statusCode).toBe(401);
     const duplicate = await app.inject({ method: 'POST', url: '/v1/platform/tenants', headers: platform, payload: { id: storeA.id, name: 'De novo' } });
     expect(duplicate.statusCode).toBe(409);
+  });
+
+  it('rejects captured requests outside the timestamp window, even with a valid signature', async () => {
+    const stale = await postWebhook(storeA.id, storeA.webhookSecret, JSON.stringify(order()), nowSeconds() - config.WEBHOOK_TOLERANCE_SECONDS - 5);
+    expect(stale.statusCode).toBe(401);
+    expect(stale.json()).toMatchObject({ error: 'timestamp_out_of_tolerance' });
+    const future = await postWebhook(storeA.id, storeA.webhookSecret, JSON.stringify(order()), nowSeconds() + config.WEBHOOK_TOLERANCE_SECONDS + 5);
+    expect(future.statusCode).toBe(401);
+  });
+
+  it('does not let a sender move the timestamp of a captured request', async () => {
+    const body = JSON.stringify(order());
+    const original = nowSeconds() - config.WEBHOOK_TOLERANCE_SECONDS - 60;
+    const forged = await app.inject({
+      method: 'POST', url: '/v1/webhooks/orders', payload: body,
+      headers: {
+        'content-type': 'application/json', 'x-tenant-id': storeA.id,
+        'x-webhook-timestamp': String(nowSeconds()), 'x-webhook-signature': signPayload(body, storeA.webhookSecret, original),
+      },
+    });
+    expect(forged.statusCode).toBe(401);
+    expect(forged.json()).toEqual({ error: 'invalid_signature' });
+  });
+
+  it('absorbs a replay inside the window through event-id dedupe', async () => {
+    const body = JSON.stringify(order());
+    const timestamp = nowSeconds();
+    expect((await postWebhook(storeA.id, storeA.webhookSecret, body, timestamp)).statusCode).toBe(202);
+    const replay = await postWebhook(storeA.id, storeA.webhookSecret, body, timestamp);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json()).toMatchObject({ status: 'duplicate_ignored' });
   });
 
   it('rotates webhook keys with a grace period and revokes immediately', async () => {

@@ -38,7 +38,17 @@ curl -X POST localhost:3000/v1/platform/tenants/loja-a/webhook-keys -H "$H" -H '
 curl -X POST localhost:3000/v1/platform/tenants/loja-a/admin-tokens -H "$H" -H 'content-type: application/json' -d '{"label":"operador"}'
 ```
 
-A loja envia pedidos para `POST /v1/webhooks/orders` com `X-Tenant-Id: loja-a` e `X-Webhook-Signature: sha256=<HMAC-SHA256 do corpo com o segredo>`. Loja inexistente, loja desativada e assinatura errada recebem a mesma resposta (401), para o endpoint não revelar quais lojas existem.
+A loja envia pedidos para `POST /v1/webhooks/orders` com três headers:
+
+- `X-Tenant-Id: loja-a`
+- `X-Webhook-Timestamp`: horário do envio em segundos Unix
+- `X-Webhook-Signature: sha256=<hex>`: HMAC-SHA256, com o segredo da loja, de `<timestamp>.<corpo bruto>`
+
+```bash
+TS=$(date +%s); SIG=$(printf '%s' "$TS.$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/.* //')
+```
+
+**Proteção contra replay:** pedidos com horário a mais de `WEBHOOK_TOLERANCE_SECONDS` (padrão 300) do relógio do servidor são recusados com `timestamp_out_of_tolerance`, mesmo com assinatura válida. Como o horário faz parte da assinatura, não dá para atualizá-lo numa requisição capturada. Dentro da janela, um reenvio idêntico cai na deduplicação por `eventId` e não gera efeito. O relógio do remetente precisa estar sincronizado (NTP). Loja inexistente, loja desativada e assinatura errada recebem a mesma resposta (401), para o endpoint não revelar quais lojas existem.
 
 - **Troca de chave sem parada:** criar uma chave nova dá às anteriores uma carência (`graceHours`, padrão 24). Durante a carência, as duas são aceitas; `graceHours: 0` encerra as antigas na hora. `DELETE .../webhook-keys/<keyId>` revoga imediatamente.
 - **Token administrativo por loja:** o dashboard e as rotas de operações usam `X-Admin-Token` da loja e só enxergam os dados dela. `DELETE .../admin-tokens/<tokenId>` revoga.
@@ -79,11 +89,11 @@ curl -H "X-Admin-Token: $STORE_ADMIN_TOKEN" \
 
 ## Segurança e crescimento
 
-- O webhook exige HMAC SHA-256 sobre o corpo bruto com a chave da loja, comparado em tempo constante, valida schema estrito e aplica limite de requisições compartilhado pelo Redis e limite de tamanho.
+- O webhook exige HMAC SHA-256 sobre horário + corpo bruto com a chave da loja, recusa horários fora da janela de tolerância, comparado em tempo constante, valida schema estrito e aplica limite de requisições compartilhado pelo Redis e limite de tamanho.
 - O banco usa chaves únicas para impedir duplicação e uma outbox para não separar a persistência do evento da intenção de publicá-lo.
 - Cada token administrativo é de uma loja e todas as consultas de operações filtram por ela; testes de integração cobrem o acesso cruzado (eventos, cursor, dead letters, redrive).
 - A API é stateless e pode escalar horizontalmente; os workers poderão escalar pela fila. A entrega deve ser tratada como *at-least-once*, com idempotência também no consumidor.
-- Ainda não é produção: faltam proteção contra replay, TLS, política de retenção e restauração de backups testada (ver `roteiro.md`).
+- Ainda não é produção: faltam TLS, política de retenção e restauração de backups testada (ver `roteiro.md`).
 
 ## Operações
 
