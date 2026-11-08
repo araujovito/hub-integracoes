@@ -1,0 +1,145 @@
+# Production-style deployment on a single Docker host.
+#
+# Differences from compose.yaml (local development):
+# - Caddy terminates HTTPS with automatic certificates; it is the only service
+#   with published ports (80/443). PostgreSQL, Redis and the API are reachable
+#   only inside the Compose network.
+# - Secrets are files mounted as Docker secrets (/run/secrets/*), read through
+#   the *_FILE convention, never environment variables. Generate them with
+#   scripts/generate-prod-secrets.sh; keep that directory out of Git and backups
+#   of the repository.
+# - NODE_ENV=production, API trusts exactly one proxy hop (Caddy).
+#
+# Usage:
+#   scripts/generate-prod-secrets.sh            # once, creates ./secrets
+#   DOMAIN=hub.example.com docker compose -f compose.prod.yaml up -d --build
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+x-backend-env: &backend-env
+  NODE_ENV: production
+  DATABASE_URL_FILE: /run/secrets/database_url
+  REDIS_URL_FILE: /run/secrets/redis_url
+  REDIS_STREAM_KEY: integration:orders
+  REDIS_CONSUMER_GROUP: erp-simulator
+
+x-dependency-healthcheck: &dependency-healthcheck
+  test: ["CMD-SHELL", "node -e \"const fs=require('fs'); const { Client } = require('pg'); const Redis = require('ioredis'); const p = new Client({ connectionString: fs.readFileSync('/run/secrets/database_url','utf8').trim() }); const r = new Redis(fs.readFileSync('/run/secrets/redis_url','utf8').trim()); Promise.all([p.connect().then(()=>p.query('SELECT 1')).finally(()=>p.end()), r.ping().finally(()=>r.quit())]).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+  interval: 20s
+  timeout: 6s
+  retries: 5
+
+services:
+  caddy:
+    image: caddy:2-alpine@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN (public hostname, or localhost to test)}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    environment:
+      POSTGRES_USER: hub
+      POSTGRES_DB: hub_integracoes
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hub -d hub_integracoes"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
+    # The password lives in a config file, not on the command line (visible in ps).
+    command: ["redis-server", "/run/secrets/redis_conf"]
+    secrets: [redis_conf, redis_password]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_password)\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      PORT: 3000
+      TRUST_PROXY_HOPS: 1
+      PLATFORM_ADMIN_TOKEN_FILE: /run/secrets/platform_admin_token
+      TENANT_SECRETS_KEY_FILE: /run/secrets/tenant_secrets_key
+      DASHBOARD_ENABLED: ${DASHBOARD_ENABLED:-true}
+      WEBHOOK_RATE_LIMIT_PER_MINUTE: ${WEBHOOK_RATE_LIMIT_PER_MINUTE:-120}
+    secrets: [database_url, redis_url, platform_admin_token, tenant_secrets_key]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+
+  relay:
+    <<: *backend
+    command: ["node", "dist/outbox-relay.js"]
+    environment:
+      <<: *backend-env
+    secrets: [database_url, redis_url]
+    healthcheck: *dependency-healthcheck
+
+  worker:
+    <<: *backend
+    command: ["node", "dist/worker.js"]
+    environment:
+      <<: *backend-env
+      WORKER_CONSUMER: worker
+    secrets: [database_url, redis_url]
+    healthcheck: *dependency-healthcheck
+
+  maintenance:
+    <<: *backend
+    command: ["node", "dist/maintenance-runner.js"]
+    environment:
+      <<: *backend-env
+      STREAM_RETENTION_HOURS: ${STREAM_RETENTION_HOURS:-72}
+      DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+    secrets: [database_url, redis_url]
+
+secrets:
+  postgres_password: { file: "${SECRETS_DIR:-./secrets}/postgres_password" }
+  redis_password: { file: "${SECRETS_DIR:-./secrets}/redis_password" }
+  redis_conf: { file: "${SECRETS_DIR:-./secrets}/redis.conf" }
+  database_url: { file: "${SECRETS_DIR:-./secrets}/database_url" }
+  redis_url: { file: "${SECRETS_DIR:-./secrets}/redis_url" }
+  platform_admin_token: { file: "${SECRETS_DIR:-./secrets}/platform_admin_token" }
+  tenant_secrets_key: { file: "${SECRETS_DIR:-./secrets}/tenant_secrets_key" }
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

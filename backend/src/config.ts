@@ -11,6 +11,10 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
+  // Number of reverse proxies in front of the API whose X-Forwarded-For is
+  // trusted (0 = none). Set to 1 only when the API is reachable solely through
+  // the proxy, otherwise clients could spoof their IP and dodge rate limits.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   // Per client IP (load tests raise it; one machine sends everything).
   WEBHOOK_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(1_000_000).default(120),
   // Max distance between a webhook's signed timestamp and the server clock.

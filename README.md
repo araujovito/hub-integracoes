@@ -101,7 +101,7 @@ curl -H "X-Admin-Token: $STORE_ADMIN_TOKEN" \
 - O banco usa chaves únicas para impedir duplicação e uma outbox para não separar a persistência do evento da intenção de publicá-lo.
 - Cada token administrativo é de uma loja e todas as consultas de operações filtram por ela; testes de integração cobrem o acesso cruzado (eventos, cursor, dead letters, redrive).
 - A API é stateless e pode escalar horizontalmente; os workers poderão escalar pela fila. A entrega deve ser tratada como *at-least-once*, com idempotência também no consumidor.
-- Ainda não é produção: faltam TLS e restauração de backups testada (ver `roteiro.md`).
+- Ainda falta restauração de backups testada (ver `roteiro.md`).
 
 ## Operações
 
@@ -118,6 +118,20 @@ As rotas abaixo exigem o `X-Admin-Token` de uma loja e respondem só com dados d
 Rotas da plataforma (`X-Platform-Token`): `POST /v1/platform/tenants`, `POST|DELETE /v1/platform/tenants/:id/webhook-keys[/:keyId]`, `POST|DELETE /v1/platform/tenants/:id/admin-tokens[/:tokenId]` e `GET /v1/platform/queue` (outbox e pendências do Redis Streams, que é compartilhado por todas as lojas).
 
 Abra o dashboard, informe o token administrativo da loja e use o redrive apenas em dados fictícios. O painel não persiste o token em `localStorage`.
+
+## Produção (um servidor com Docker)
+
+`compose.prod.yaml` é a configuração de produção, independente da de desenvolvimento:
+
+```bash
+scripts/generate-prod-secrets.sh                       # uma vez: cria ./secrets (fora do Git)
+DOMAIN=hub.exemplo.com.br docker compose -f compose.prod.yaml up -d --build
+```
+
+- **HTTPS:** o Caddy recebe nas portas 80/443 e emite e renova o certificado sozinho (Let's Encrypt). O DNS do `DOMAIN` precisa apontar para o servidor, com as portas 80 e 443 abertas. HTTP redireciona para HTTPS, e o HSTS fica ligado. Com `DOMAIN=localhost`, o Caddy usa a autoridade certificadora interna dele, útil só para testar.
+- **Rede:** só o Caddy publica portas. PostgreSQL, Redis e a API ficam acessíveis apenas dentro da rede do Compose. A API confia em exatamente um proxy (`TRUST_PROXY_HOPS=1`), então limite por IP e logs usam o IP real do cliente.
+- **Segredos:** arquivos em `./secrets`, montados como Docker secrets e lidos pela convenção `*_FILE`. Nenhum segredo vai para variáveis de ambiente nem aparece no `docker inspect`. A senha do Redis fica num arquivo de configuração, não na linha de comando. Para usar um gerenciador de segredos (Vault, AWS/GCP Secret Manager), basta o agente dele gravar os mesmos arquivos.
+- **`TENANT_SECRETS_KEY`** é a chave que decifra as chaves de webhook das lojas. Guarde uma cópia dela separada dos backups do banco: sem ela, um backup restaurado não verifica nenhum webhook.
 
 ## Verificação e documentação
 

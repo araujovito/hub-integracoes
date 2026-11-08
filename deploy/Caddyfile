@@ -1,0 +1,35 @@
+# TLS terminator in front of the API. With a public DOMAIN, Caddy obtains and
+# renews certificates automatically (ACME / Let's Encrypt); ports 80 and 443
+# must be reachable from the internet. With DOMAIN=localhost it uses its own
+# internal CA (useful only to test the setup locally).
+# No ACME account email is configured: Let's Encrypt works without one, at the
+# cost of not receiving expiry warnings (Caddy renews automatically anyway).
+{
+	# Caddy is the edge: it does not trust incoming X-Forwarded-For and sets it
+	# to the real client address. The API trusts exactly this one hop.
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# Matches the API's own 256 KiB limit; oversized bodies stop here.
+	request_body {
+		max_size 256KB
+	}
+
+	reverse_proxy api:3000 {
+		health_uri /ready
+		health_interval 10s
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

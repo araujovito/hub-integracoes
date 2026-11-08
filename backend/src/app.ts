@@ -34,7 +34,8 @@ export async function buildApp({ pool, redis, secrets, logger = true }: AppDepen
   const app = Fastify({
     logger: logger ? { redact: ['req.headers.authorization', 'req.headers.x-admin-token', 'req.headers.x-platform-token', 'req.headers.x-webhook-signature'] } : false,
     bodyLimit: 256 * 1024,
-    trustProxy: false,
+    // Trust only the nearest TRUST_PROXY_HOPS proxies (hop 0 is the socket peer).
+    trustProxy: config.TRUST_PROXY_HOPS > 0 ? (_address: string, hop: number) => hop < config.TRUST_PROXY_HOPS : false,
   });
   const dashboardHtml = await readFile(resolve(process.cwd(), '../dashboard/index.html'), 'utf8').catch(() => '<h1>Dashboard asset unavailable</h1>');
 
