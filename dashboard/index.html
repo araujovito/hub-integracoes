@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Hub de Integrações — Operações</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#e7edf6;background:#080d16;font-synthesis:none;color-scheme:dark}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 82% -10%,#17334b 0,transparent 38%),#080d16}
+    main{max-width:1180px;margin:auto;padding:44px 24px 70px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:36px}
+    .eyebrow{font-size:12px;letter-spacing:.17em;text-transform:uppercase;color:#62d9bd;font-weight:700}.title{font-size:clamp(30px,5vw,50px);letter-spacing:-.045em;margin:9px 0}.sub{color:#8d9bb0;margin:0}
+    .button,button{border:1px solid #29415c;background:#112033;color:#dce9f7;border-radius:10px;padding:10px 14px;font:inherit;cursor:pointer}.button:hover,button:hover{background:#17304b}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #62d9bd;outline-offset:2px}button:disabled{opacity:.6;cursor:not-allowed}
+    .auth{display:flex;gap:8px;align-items:center}.auth input{width:190px;background:#0c1522;color:#fff;border:1px solid #253a52;border-radius:9px;padding:11px}
+    .grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:13px}.card,.panel{background:linear-gradient(145deg,#111c2b,#0d1521);border:1px solid #1b2b3f;border-radius:16px;box-shadow:0 12px 40px #0002}
+    .metric{padding:20px}.metric label{color:#8293a9;font-size:13px}.metric strong{display:block;font-size:32px;margin-top:14px;letter-spacing:-.04em}.metric small{color:#62d9bd}
+    .layout{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin-top:14px}.panel{padding:20px;min-width:0}.panel h2{font-size:16px;margin:0 0 17px}.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}.toolbar select,.toolbar input{background:#0c1522;color:#dce9f7;border:1px solid #253a52;border-radius:8px;padding:9px}.toolbar label{display:flex;gap:7px;align-items:center;color:#aab9cb;font-size:13px}
+    .table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;font-size:13px}th{text-align:left;color:#8191a6;font-weight:500;padding:10px 8px;border-bottom:1px solid #203047}td{padding:12px 8px;border-bottom:1px solid #17263a;white-space:nowrap}td:last-child{white-space:normal;color:#97a7ba}
+    .pill{display:inline-block;border-radius:999px;padding:4px 8px;background:#1a2a3d;color:#bacce0;font-size:11px}.delivered{color:#65ddb9;background:#10342d}.failed{color:#ff9b9b;background:#3a1c25}.queued,.processing{color:#ffd37c;background:#342b17}
+    .empty{padding:26px 8px;color:#8090a5;text-align:center}.foot{margin-top:20px;color:#74849a;font-size:12px;display:flex;justify-content:space-between}.error{color:#ff9b9b;min-height:22px;margin:0 0 10px;font-size:13px}
+    @media(max-width:1000px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.auth{width:100%}.auth input{flex:1}}
+    @media(max-width:480px){main{padding:28px 15px}.grid{gap:8px}.metric{padding:15px}.metric strong{font-size:26px}.auth{flex-wrap:wrap}.auth input{width:100%;flex:auto}}
+  </style>
+</head>
+<body>
+<main>
+  <header class="top"><div><div class="eyebrow">Integration control plane</div><h1 class="title">Operações</h1><p class="sub">Saúde dos eventos, entregas e consumo de IA.</p></div>
+    <form class="auth" id="auth"><input id="token" type="password" autocomplete="off" placeholder="X-Admin-Token" aria-label="Token administrativo" aria-describedby="auth-help"><button>Conectar</button><button type="button" id="refresh">Atualizar</button><span class="sub" id="auth-help">A credencial fica apenas nesta aba.</span></form>
+  </header>
+  <p class="error" id="error" role="alert" aria-live="polite"></p>
+  <section class="grid" id="metrics" aria-label="Resumo" aria-live="polite"></section>
+  <section class="layout">
+    <article class="panel"><h2>Eventos recentes</h2><div class="toolbar"><select id="status"><option value="">Todos os status</option><option>received</option><option>queued</option><option>processing</option><option>delivered</option><option>failed</option></select></div><div class="table-wrap"><table><thead><tr><th>Evento</th><th>Pedido</th><th>Status</th><th>Tentativas</th><th>Atualizado</th></tr></thead><tbody id="events"></tbody></table></div><div class="foot"><span>Últimos 25 eventos</span><span id="updated"></span></div></article>
+    <article class="panel"><h2>Dead letters</h2><div class="table-wrap"><table><thead><tr><th>Evento</th><th>Tentativas</th><th>Falha</th><th>Ação</th></tr></thead><tbody id="dead"></tbody></table></div><div class="empty" id="dead-empty" hidden>Nenhuma falha terminal pendente.</div></article>
+  </section>
+  <section class="layout"><article class="panel"><h2>Consumo de tokens de IA</h2><div class="toolbar"><button id="run-ai" type="button" disabled>Executar exemplo de IA</button><span class="sub" id="ai-status">Verificando provider…</span></div><div class="toolbar"><label for="token-from">De <input id="token-from" type="date" required></label><label for="token-to">Até <input id="token-to" type="date" required></label><button id="apply-token-range" type="button">Filtrar</button></div><p class="error" id="ai-result" role="status" aria-live="polite"></p><div class="table-wrap"><table><thead><tr><th scope="col">Provider / modelo / tarefa</th><th scope="col">Req.</th><th scope="col">Entrada</th><th scope="col">Cache¹</th><th scope="col">Saída</th><th scope="col">Raciocínio²</th><th scope="col">Total tokens</th></tr></thead><tbody id="tokens"></tbody></table></div><div class="empty" id="tokens-empty" hidden>Sem chamadas registradas neste período. Configure OPENAI_API_KEY para habilitar o exemplo.</div><p class="sub">Cache é parte da entrada¹; raciocínio é parte da saída². O total não soma essas partes duas vezes. A contagem é somente em tokens, sem conversão monetária.</p></article><article class="panel"><h2>Notas de segurança</h2><p class="sub">O token admin fica somente na memória desta página. Prompts e respostas não são persistidos pelo app; o exemplo envia apenas uma pergunta fixa. O botão chama a OpenAI API e consome tokens da conta API. A admissão considera o consumo real registrado e reserva uma margem de entrada; o total exato só é conhecido após a resposta.</p></article></section>
+</main>
+<script>
+  let adminToken = '';
+  const $ = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const date = (value) => value ? new Date(value).toLocaleString('pt-BR') : '—';
+  const isoDate = (value) => { const dateValue = new Date(value); return `${dateValue.getFullYear()}-${String(dateValue.getMonth()+1).padStart(2,'0')}-${String(dateValue.getDate()).padStart(2,'0')}`; };
+  const today = new Date();
+  $('token-to').value = isoDate(today);
+  const monthStart = new Date(today); monthStart.setDate(monthStart.getDate() - 29);
+  $('token-from').value = isoDate(monthStart);
+  async function api(path, options = {}) {
+    const response = await fetch(path, { ...options, headers: { 'x-admin-token': adminToken, ...(options.headers || {}) } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(response.status === 401 ? 'Token inválido ou não autorizado.' : data.error || `Falha HTTP ${response.status}`);
+    return data;
+  }
+  function renderMetrics(summary, tokenSummary) {
+    const counts = Object.fromEntries(summary.statuses.map((item) => [item.status, item.count]));
+    const cards = [['Recebidos', (counts.received || 0).toLocaleString('pt-BR')], ['Em processamento', ((counts.queued || 0) + (counts.processing || 0)).toLocaleString('pt-BR')], ['Entregues', (counts.delivered || 0).toLocaleString('pt-BR')], ['Falhos', (counts.failed || 0).toLocaleString('pt-BR')], ['Tokens de IA', Number(tokenSummary.total_tokens).toLocaleString('pt-BR')]];
+    $('metrics').innerHTML = cards.map(([label, value]) => `<article class="card metric"><label>${label}</label><strong>${value}</strong><small>● atualizado ao vivo</small></article>`).join('');
+  }
+  async function load() {
+    if (!adminToken) return;
+    $('error').textContent = '';
+    $('updated').textContent = 'Atualizando…';
+    try {
+      const status = $('status').value;
+      const fromDate = $('token-from').value;
+      const toDate = $('token-to').value;
+      if (!fromDate || !toDate || fromDate > toDate) throw new Error('Selecione um período de datas válido.');
+      const toExclusive = new Date(`${toDate}T00:00:00Z`); toExclusive.setUTCDate(toExclusive.getUTCDate() + 1);
+      const tokenRange = `from=${encodeURIComponent(`${fromDate}T00:00:00.000Z`)}&to=${encodeURIComponent(toExclusive.toISOString())}`;
+      const [summary, events, dead, tokens, aiStatus] = await Promise.all([
+        api('/v1/operations/summary'), api(`/v1/operations/events?limit=25${status ? `&status=${encodeURIComponent(status)}` : ''}`),
+        api('/v1/operations/dead-letters'), api(`/v1/usage/tokens?${tokenRange}`), api('/v1/ai/status'),
+      ]);
+      renderMetrics(summary, tokens.summary);
+      $('events').innerHTML = events.events.length ? events.events.map((event) => `<tr><td>${esc(event.externalEventId)}</td><td>${esc(event.orderId)}</td><td><span class="pill ${esc(event.status)}">${esc(event.status)}</span></td><td>${event.attempts}</td><td>${date(event.updatedAt)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">Nenhum evento neste filtro.</td></tr>';
+      $('dead').innerHTML = dead.deadLetters.map((item) => `<tr><td>${esc(item.externalEventId)}</td><td>${item.attempts}</td><td>${esc(item.reason)}</td><td><button data-redrive="${esc(item.id)}">Reprocessar</button></td></tr>`).join('');
+      $('dead-empty').hidden = dead.deadLetters.length > 0;
+      $('tokens').innerHTML = tokens.usage.map((item) => `<tr><td>${esc(item.provider)} / ${esc(item.model)} / ${esc(item.task)}</td><td>${Number(item.requests).toLocaleString('pt-BR')}</td><td>${Number(item.input_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.cached_input_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.output_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.reasoning_tokens).toLocaleString('pt-BR')}</td><td>${Number(item.total_tokens).toLocaleString('pt-BR')}</td></tr>`).join('');
+      $('tokens-empty').hidden = tokens.usage.length > 0;
+      const tokenBudgetAvailable = Number(aiStatus.remainingTokensToday) >= Number(aiStatus.reservedInputTokens) + 16;
+      $('run-ai').disabled = !aiStatus.enabled || !tokenBudgetAvailable || aiStatus.unresolvedRequests > 0;
+      $('run-ai').textContent = !aiStatus.enabled ? 'Exemplo IA indisponível' : tokenBudgetAvailable ? `Rodar ${aiStatus.model} (consome tokens)` : 'Teto diário de tokens atingido';
+      $('ai-status').textContent = aiStatus.enabled
+        ? `${Number(aiStatus.usedTokensToday).toLocaleString('pt-BR')} tokens usados hoje (UTC) • teto ${Number(aiStatus.dailyTokenLimit).toLocaleString('pt-BR')}`
+        : 'Configure OPENAI_API_KEY no ambiente e reinicie os serviços.';
+      if (aiStatus.unresolvedRequests > 0) $('ai-status').textContent = `Consumo incompleto: ${aiStatus.unresolvedRequests} chamada(s) sem resultado confirmado. Novas chamadas bloqueadas; consulte o README.`;
+      $('updated').textContent = `Atualizado ${new Date().toLocaleTimeString('pt-BR')}`;
+    } catch (error) { $('error').textContent = error.message; $('updated').textContent = 'Falha na atualização'; }
+  }
+  $('auth').addEventListener('submit', (event) => { event.preventDefault(); adminToken = $('token').value; $('token').value = ''; load(); });
+  $('refresh').addEventListener('click', load); $('status').addEventListener('change', load); $('apply-token-range').addEventListener('click', load);
+  $('run-ai').addEventListener('click', async () => { $('run-ai').disabled = true; $('ai-result').textContent = 'Chamando provider…'; try { const result = await api('/v1/ai/demo', { method: 'POST' }); $('ai-result').textContent = `${result.text} — ${result.usage.totalTokens} tokens (${result.usage.inputTokens} entrada + ${result.usage.outputTokens} saída), request ${result.requestId}`; await load(); } catch (error) { $('ai-result').textContent = error.message; await load(); } });
+  $('dead').addEventListener('click', async (event) => { const id = event.target.dataset.redrive; if (!id) return; try { await api(`/v1/operations/dead-letters/${id}/redrive`, { method: 'POST' }); await load(); } catch (error) { $('error').textContent = error.message; } });
+  setInterval(load, 15000);
+</script>
+</body>
+</html>
