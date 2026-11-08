@@ -1,0 +1,124 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hub_dev}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-hub_integracoes}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hub_dev} -d ${POSTGRES_DB:-hub_integracoes}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-local-only-change-this-password}", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD:-local-only-change-this-password}' ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
+      REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
+      REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
+      DASHBOARD_ENABLED: ${DASHBOARD_ENABLED:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+      OPENAI_MAX_OUTPUT_TOKENS: ${OPENAI_MAX_OUTPUT_TOKENS:-96}
+      OPENAI_DAILY_TOKEN_LIMIT: ${OPENAI_DAILY_TOKEN_LIMIT:-5000}
+      OPENAI_RESERVED_INPUT_TOKENS: ${OPENAI_RESERVED_INPUT_TOKENS:-256}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 4s
+      retries: 5
+
+  relay:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["node", "dist/outbox-relay.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
+      REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
+      REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const { Client } = require('pg'); const Redis = require('ioredis'); const p = new Client({ connectionString: process.env.DATABASE_URL }); const r = new Redis(process.env.REDIS_URL); Promise.all([p.connect().then(()=>p.query('SELECT 1')).finally(()=>p.end()), r.ping().finally(()=>r.quit())]).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["node", "dist/worker.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      DATABASE_URL: postgres://${POSTGRES_USER:-hub_dev}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-hub_integracoes}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-local-only-change-this-password}@redis:6379
+      DEMO_TENANT_ID: ${DEMO_TENANT_ID:-demo}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in .env}
+      ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:?Set ADMIN_API_TOKEN in .env}
+      REDIS_STREAM_KEY: ${REDIS_STREAM_KEY:-integration:orders}
+      REDIS_CONSUMER_GROUP: ${REDIS_CONSUMER_GROUP:-erp-simulator}
+      WORKER_CONSUMER: ${WORKER_CONSUMER:-worker}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-5}
+      WORKER_CLAIM_IDLE_MS: ${WORKER_CLAIM_IDLE_MS:-30000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const { Client } = require('pg'); const Redis = require('ioredis'); const p = new Client({ connectionString: process.env.DATABASE_URL }); const r = new Redis(process.env.REDIS_URL); Promise.all([p.connect().then(()=>p.query('SELECT 1')).finally(()=>p.end()), r.ping().finally(()=>r.quit())]).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 6s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
