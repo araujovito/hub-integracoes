@@ -1,0 +1,4 @@
+# Reviewed false positives. Format: <commit>:<file>:<rule>:<line>
+# TENANT_SECRETS_KEY placeholder in .env.example: base64 of the literal text
+# "local-only-change-this-32-bytes!", valid shape for local dev, protects nothing.
+f5c45a24e7d067690c53402be8de3d03f9dbeb03:.env.example:generic-api-key:17
