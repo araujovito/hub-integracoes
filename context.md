@@ -25,6 +25,7 @@ Demonstrar competências úteis para vagas de integração e desenvolvimento ful
 - Compose sobe serviços `api`, `relay` e `worker` além de PostgreSQL/Redis.
 - API operacional: summary, eventos paginados, dead letters e redrive via outbox transacional; dashboard local em `/dashboard` com token mantido só em memória. O painel inclui foco visível, mensagens de carregamento/erro e filtro de datas em UTC.
 - 8 testes de integração opcionais em `backend/test/integration.test.ts` cobrindo migrations repetíveis, recuperação de outbox após falha Redis, idempotência do ledger por request ID, lock concorrente do teto de tokens, duplicata concorrente no destino, retry/DLQ, consumer group e recuperação via `XAUTOCLAIM`; testes locais também verificam escaping e armazenamento do token no dashboard. Workflow CI inclui lint, auditoria de todas as dependências e secret scan. Vitest está em 4.1.12 e minimatch é resolvido para versão corrigida; auditoria completa local passou com zero vulnerabilidades.
+- `yarn test` roda num clone limpo: `backend/test/setup-env.ts` (via `vitest.config.ts`) preenche só as variáveis ausentes com placeholders inertes. Com `RUN_INTEGRATION_TESTS=true` nada é preenchido, e a falta de conexão real falha na hora.
 - Migrations `003_ai_usage_details.sql` e `005_token_only_usage.sql` mantêm breakdown de cache/raciocínio e removem colunas de custo/preço em moeda; a migration `004` é histórica. `OPENAI_MODEL` default `gpt-6-luna` é modelo de API, não leitura/medição da sessão Codex.
 
 ## Decisões/limites
